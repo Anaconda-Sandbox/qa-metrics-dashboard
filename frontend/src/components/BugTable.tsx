@@ -10,7 +10,8 @@ const priorityColor: Record<string, string> = {
 };
 
 interface Props {
-  squad: string | null;
+  project: string | null;
+  quarter?: string;
 }
 
 interface Bug {
@@ -25,8 +26,8 @@ interface Bug {
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
-export default function BugTable({ squad }: Props) {
-  const { data, isLoading, error } = useOpenBugs(2000, squad);
+export default function BugTable({ project, quarter }: Props) {
+  const { data, isLoading, error } = useOpenBugs(2000, null, project, quarter);
 
   const [priorityFilter, setPriorityFilter] = useState<string>("All");
   const [statusFilter, setStatusFilter] = useState<string>("All");

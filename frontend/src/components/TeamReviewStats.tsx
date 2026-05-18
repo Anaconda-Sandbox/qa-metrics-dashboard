@@ -36,21 +36,23 @@ interface TeamReviewStats {
   weekly_trend: WeeklyTrend[];
 }
 
-function useTeamReviewStats(squad: string | null, days: number = 30) {
+function useTeamReviewStats(project: string | null, quarter: string | null) {
   return useQuery({
-    queryKey: ["github", "team-review-stats", squad, days],
+    queryKey: ["github", "team-review-stats", project, quarter],
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (squad) params.append("squad", squad);
-      params.append("days", String(days));
+      if (project) params.append("project", project);
+      if (quarter) params.append("quarter", quarter);
       const { data } = await api.get(`/github/team-review-stats?${params}`);
       return data as TeamReviewStats;
     },
   });
 }
 
-export default function TeamReviewStats({ squad }: { squad: string | null }) {
-  const { data, isLoading, error } = useTeamReviewStats(squad);
+export default function TeamReviewStats({ project, quarter }: { project: string | null; quarter?: string }) {
+  const { data, isLoading, error } = useTeamReviewStats(project, quarter || null);
+
+  const periodLabel = quarter ? quarter.replace("-", " ") : "30d";
 
   if (isLoading) {
     return (
@@ -127,7 +129,7 @@ export default function TeamReviewStats({ squad }: { squad: string | null }) {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="rounded-xl bg-[#0f1419] border border-[#1e2a3a]/60 p-4 text-center">
           <p className="text-2xl font-bold text-cyan-400">{data?.total_reviews ?? 0}</p>
-          <p className="text-[11px] text-[#64748b] mt-1">Total Reviews (30d)</p>
+          <p className="text-[11px] text-[#64748b] mt-1">Total Reviews ({periodLabel})</p>
         </div>
         <div className="rounded-xl bg-[#0f1419] border border-[#1e2a3a]/60 p-4 text-center">
           <p className="text-2xl font-bold text-indigo-400">{data?.human_reviews ?? 0}</p>

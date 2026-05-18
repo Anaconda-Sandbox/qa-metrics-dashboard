@@ -1,26 +1,26 @@
 import { useConfig } from "../hooks/useMetrics";
 
 interface ProjectSelectorProps {
-  squad: string;
-  onSquadChange: (squad: string) => void;
+  project: string;
+  onProjectChange: (project: string) => void;
 }
 
-export default function ProjectSelector({ squad, onSquadChange }: ProjectSelectorProps) {
+export default function ProjectSelector({ project, onProjectChange }: ProjectSelectorProps) {
   const { data: config } = useConfig();
 
-  const squads = config?.squads || [];
+  const projects = config?.projects || [];
 
   return (
     <div className="flex items-center gap-2">
       <select
-        value={squad}
-        onChange={(e) => onSquadChange(e.target.value)}
-        className="appearance-none bg-[#0f1419] border border-[#1e2a3a] rounded-lg px-3 py-1.5 pr-8 text-xs font-medium text-[#e2e8f0] cursor-pointer hover:border-[#6366f1]/50 focus:border-[#6366f1] focus:outline-none transition-colors"
+        value={project}
+        onChange={(e) => onProjectChange(e.target.value)}
+        className="appearance-none bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-lg px-3 py-1.5 pr-8 text-xs font-medium text-[var(--text-secondary)] cursor-pointer hover:border-[var(--accent-primary)]/50 focus:border-[var(--accent-primary)] focus:outline-none transition-colors"
       >
-        <option value="ALL">All Squads</option>
-        {squads.map((s: { key: string; name: string }) => (
-          <option key={s.key} value={s.key}>
-            {s.name}
+        <option value="ALL">All Projects</option>
+        {projects.map((p: { key: string; name: string }) => (
+          <option key={p.key} value={p.key}>
+            {p.key} - {p.name}
           </option>
         ))}
       </select>

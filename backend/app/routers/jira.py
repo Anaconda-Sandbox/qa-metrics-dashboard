@@ -20,9 +20,10 @@ router = APIRouter(prefix="/api/jira", tags=["jira"])
 async def defect_density(
     squad: str | None = Query(default=None),
     project: str | None = Query(default=None),
+    quarter: str | None = Query(default=None, description="Quarter in format YYYY-QN, e.g., 2026-Q2"),
 ):
     try:
-        return await jira_service.get_defect_density(squad=squad, project=project)
+        return await jira_service.get_defect_density(squad=squad, project=project, quarter=quarter)
     except Exception as e:
         logger.error(f"Error fetching defect density: {e}")
         return {"error": str(e), "data": None}
@@ -33,9 +34,10 @@ async def open_bugs(
     limit: int = Query(default=1000, le=2000),
     squad: str | None = Query(default=None),
     project: str | None = Query(default=None),
+    quarter: str | None = Query(default=None, description="Quarter in format YYYY-QN, e.g., 2026-Q2"),
 ):
     try:
-        return await jira_service.get_open_bugs(limit=limit, squad=squad, project=project)
+        return await jira_service.get_open_bugs(limit=limit, squad=squad, project=project, quarter=quarter)
     except Exception as e:
         logger.error(f"Error fetching open bugs: {e}")
         return {"error": str(e), "data": None}
@@ -69,9 +71,10 @@ async def bug_status_breakdown(
 async def automation_coverage(
     squad: str | None = Query(default=None),
     project: str | None = Query(default=None),
+    quarter: str | None = Query(default=None, description="Quarter in format YYYY-QN, e.g., 2026-Q2"),
 ):
     try:
-        return await jira_service.get_automation_coverage(squad=squad, project=project)
+        return await jira_service.get_automation_coverage(squad=squad, project=project, quarter=quarter)
     except Exception as e:
         logger.error(f"Error fetching automation coverage: {e}")
         return {"error": str(e), "data": None}
@@ -94,10 +97,11 @@ async def bugs_list(
 async def story_points(
     squad: str | None = Query(default=None),
     project: str | None = Query(default=None),
+    quarter: str | None = Query(default=None, description="Quarter in format YYYY-QN, e.g., 2026-Q2"),
 ):
     """Get story points metrics including velocity trend and per-member breakdown"""
     try:
-        return await jira_service.get_story_points(squad=squad, project=project)
+        return await jira_service.get_story_points(squad=squad, project=project, quarter=quarter)
     except Exception as e:
         logger.error(f"Error fetching story points: {e}")
         return {"error": str(e), "data": None}

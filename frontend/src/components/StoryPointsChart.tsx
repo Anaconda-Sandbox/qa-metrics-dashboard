@@ -54,20 +54,21 @@ interface StoryPointsData {
   avg_velocity: number;
 }
 
-function useStoryPoints(squad: string | null) {
+function useStoryPoints(project: string | null, quarter: string | null) {
   return useQuery({
-    queryKey: ["jira", "story-points", squad],
+    queryKey: ["jira", "story-points", project, quarter],
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (squad) params.append("squad", squad);
+      if (project) params.append("project", project);
+      if (quarter) params.append("quarter", quarter);
       const { data } = await api.get(`/jira/story-points?${params}`);
       return data as StoryPointsData;
     },
   });
 }
 
-export default function StoryPointsChart({ squad }: { squad: string | null }) {
-  const { data, isLoading, error } = useStoryPoints(squad);
+export default function StoryPointsChart({ project, quarter }: { project: string | null; quarter?: string }) {
+  const { data, isLoading, error } = useStoryPoints(project, quarter || null);
 
   if (isLoading) {
     return (

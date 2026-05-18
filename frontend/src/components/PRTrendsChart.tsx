@@ -10,11 +10,12 @@ import {
 import { usePRTrends } from "../hooks/useMetrics";
 
 interface Props {
-  squad: string | null;
+  project: string | null;
+  quarter?: string;
 }
 
-export default function PRTrendsChart({ squad }: Props) {
-  const { data, isLoading, error } = usePRTrends(squad);
+export default function PRTrendsChart({ project, quarter }: Props) {
+  const { data, isLoading, error } = usePRTrends(null, project, quarter);
 
   if (isLoading) {
     return (

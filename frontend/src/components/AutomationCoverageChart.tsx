@@ -17,12 +17,40 @@ const BAR_COLORS: Record<string, string> = {
   Other: "#64748b",
 };
 
-interface Props {
-  squad: string | null;
+const JIRA_BASE = "https://anaconda.atlassian.net/issues/";
+
+// Build JQL for each test type
+function buildJiraUrl(type: string, project: string | null): string {
+  const projects = project && project !== "ALL" ? project : "SIR, PKG, AIC, PA, INST, PDA, AIP, CBR, BIG, DESK, TBP, CASH, AQUA, CLOUD, SHP, HUB, CLI";
+
+  let labelFilter = "";
+  if (type === "CLI") {
+    labelFilter = 'AND labels in ("cli", "CLI", "cli-test", "cli-automation")';
+  } else if (type === "API") {
+    labelFilter = 'AND labels in ("api", "API", "api-test", "api-automation")';
+  } else if (type === "UI") {
+    labelFilter = 'AND labels in ("ui", "UI", "gui", "GUI", "ui-test", "ui-automation")';
+  } else if (type === "GHA") {
+    labelFilter = 'AND labels in ("gha", "GHA", "github-action", "github-actions")';
+  } else if (type === "Other") {
+    labelFilter = 'AND labels in ("Automated", "automation", "qa-automation") AND labels not in ("cli", "CLI", "api", "API", "ui", "UI", "gui", "GUI", "gha", "GHA", "github-action")';
+  }
+
+  const jql = `project in (${projects}) AND issuetype = Test AND labels in ("Automated", "automation", "qa-automation") ${labelFilter} ORDER BY created DESC`;
+  return `${JIRA_BASE}?jql=${encodeURIComponent(jql)}`;
 }
 
-export default function AutomationCoverageChart({ squad }: Props) {
-  const { data, isLoading, error } = useAutomationCoverage(squad);
+interface Props {
+  project: string | null;
+}
+
+export default function AutomationCoverageChart({ project }: Props) {
+  const { data, isLoading, error } = useAutomationCoverage(null, project);
+
+  const handleBarClick = (type: string) => {
+    const url = buildJiraUrl(type, project);
+    window.open(url, "_blank");
+  };
 
   if (isLoading) {
     return (
@@ -68,7 +96,7 @@ export default function AutomationCoverageChart({ squad }: Props) {
       <h3 className="text-base font-semibold text-[#e2e8f0] mb-1">
         Automation Coverage
       </h3>
-      <p className="text-xs text-[#64748b] mb-4">Test automation breakdown</p>
+      <p className="text-xs text-[#64748b] mb-4">Test automation breakdown <span className="text-[#6366f1]">(click bars to view in Jira)</span></p>
       <div className="flex items-center gap-6">
         <div className="flex-shrink-0 text-center">
           <div className="relative inline-flex items-center justify-center">
@@ -105,8 +133,15 @@ export default function AutomationCoverageChart({ squad }: Props) {
               <Tooltip
                 contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", borderRadius: "8px" }}
                 labelStyle={{ color: "#e2e8f0" }}
+                formatter={(value: number, name: string) => [value, "Click to view in Jira"]}
               />
-              <Bar dataKey="count" radius={[0, 6, 6, 0]} barSize={18}>
+              <Bar
+                dataKey="count"
+                radius={[0, 6, 6, 0]}
+                barSize={18}
+                cursor="pointer"
+                onClick={(data) => handleBarClick(data.name)}
+              >
                 {chartData.map((entry) => (
                   <Cell
                     key={entry.name}

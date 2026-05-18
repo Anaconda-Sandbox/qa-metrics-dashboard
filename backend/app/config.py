@@ -114,6 +114,80 @@ ALL_JIRA_PROJECTS = list(set(
     proj for squad in SQUAD_CONFIG.values() for proj in squad["jira_projects"]
 ))
 
+# Project-level config: maps each Jira project to its repos
+# Members are NOT tied to projects - we use ALL_QA_MEMBERS globally
+# This ensures any QA member's work appears under whichever project repos they contribute to
+PROJECT_CONFIG = {
+    "SIR": {
+        "name": "Sirius",
+        "repos": ["sirius-qa-suite"],
+    },
+    "PKG": {
+        "name": "Package Build - Core",
+        "repos": ["package-build-platform"],
+    },
+    "AIC": {
+        "name": "AI Core",
+        "repos": ["ai-platform-ui", "ai-core", "anaconda-ai", "ai-catalyst"],
+    },
+    "PA": {
+        "name": "Python Anywhere",
+        "repos": ["PythonAnywhere"],
+    },
+    "INST": {
+        "name": "Installers",
+        "repos": ["installers"],
+    },
+    "PDA": {
+        "name": "PDA",
+        "repos": ["src-tooling"],
+    },
+    "AIP": {
+        "name": "AI Platform",
+        "repos": ["te-repo-testing", "audit-logs"],
+    },
+    "CBR": {
+        "name": "CBR",
+        "repos": ["te-repo-testing"],
+    },
+    "BIG": {
+        "name": "BigBend",
+        "repos": ["bigbend-platform"],
+    },
+    "DESK": {
+        "name": "Desktop",
+        "repos": ["notebooks-testing", "ai-navigator", "anaconda-desktop", "anaconda-connector"],
+    },
+    "TBP": {
+        "name": "Toolbox Pro",
+        "repos": ["anaconda-mcp"],
+    },
+    "CASH": {
+        "name": "Auth & Payments",
+        "repos": ["auth-ui", "auth-mfe"],
+    },
+    "AQUA": {
+        "name": "Aqua",
+        "repos": ["ui"],
+    },
+    "CLOUD": {
+        "name": "Cloud",
+        "repos": ["ui", "ai-platform-ui"],
+    },
+    "SHP": {
+        "name": "Shop",
+        "repos": ["ui"],
+    },
+    "HUB": {
+        "name": "Hub / Telemetry",
+        "repos": ["distribution-installer-attribution", "installer-attribution-bootstrap", "anaconda-otel-ts-testing", "anaconda-otel-python-testing", "bigbend-platform"],
+    },
+    "CLI": {
+        "name": "Anaconda CLI",
+        "repos": ["anaconda-cli", "anaconda-cli-testing"],
+    },
+}
+
 
 class Settings(BaseSettings):
     jira_base_url: str = "https://anaconda.atlassian.net"
@@ -140,26 +214,27 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",")]
 
     def repos_for_filter(self, squad: str | None, project: str | None) -> list[str]:
+        # Project takes priority over squad
+        if project and project != "ALL":
+            cfg = PROJECT_CONFIG.get(project)
+            return cfg["repos"] if cfg else ALL_REPOS
         if squad and squad != "ALL":
             cfg = SQUAD_CONFIG.get(squad)
             return cfg["repos"] if cfg else []
-        if project and project != "ALL":
-            return [
-                repo for sq in SQUAD_CONFIG.values()
-                for repo in sq["repos"]
-                if project in sq["jira_projects"]
-            ] or ALL_REPOS
         return ALL_REPOS
 
     def jira_projects_for_filter(self, squad: str | None, project: str | None) -> list[str]:
+        # Project takes priority over squad
+        if project and project != "ALL":
+            return [project]
         if squad and squad != "ALL":
             cfg = SQUAD_CONFIG.get(squad)
             return cfg["jira_projects"] if cfg else ALL_JIRA_PROJECTS
-        if project and project != "ALL":
-            return [project]
         return ALL_JIRA_PROJECTS
 
-    def members_for_filter(self, squad: str | None) -> list[str]:
+    def members_for_filter(self, squad: str | None = None, project: str | None = None) -> list[str]:
+        # Always return all QA members - filtering by project happens via repos
+        # This ensures any QA member's work appears under whichever project they contributed to
         if squad and squad != "ALL":
             cfg = SQUAD_CONFIG.get(squad)
             return cfg["members"] if cfg else ALL_QA_MEMBERS

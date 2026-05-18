@@ -19,9 +19,10 @@ router = APIRouter(prefix="/api/github", tags=["github"])
 async def pr_trends(
     squad: str | None = Query(default=None),
     project: str | None = Query(default=None),
+    quarter: str | None = Query(default=None, description="Quarter in format YYYY-QN, e.g., 2026-Q2"),
 ):
     try:
-        return await github_service.get_pr_trends(squad=squad, project=project)
+        return await github_service.get_pr_trends(squad=squad, project=project, quarter=quarter)
     except Exception as e:
         logger.error(f"Error fetching PR trends: {e}")
         return {"error": str(e), "data": None}
@@ -31,9 +32,10 @@ async def pr_trends(
 async def pr_stats(
     squad: str | None = Query(default=None),
     project: str | None = Query(default=None),
+    quarter: str | None = Query(default=None, description="Quarter in format YYYY-QN, e.g., 2026-Q2"),
 ):
     try:
-        return await github_service.get_pr_stats(squad=squad, project=project)
+        return await github_service.get_pr_stats(squad=squad, project=project, quarter=quarter)
     except Exception as e:
         logger.error(f"Error fetching PR stats: {e}")
         return {"error": str(e), "data": None}
@@ -56,10 +58,10 @@ async def recent_prs(
 async def team_contributions(
     squad: str | None = Query(default=None),
     project: str | None = Query(default=None),
-    days: int = Query(default=30, le=90),
+    quarter: str | None = Query(default=None, description="Quarter in format YYYY-QN, e.g., 2026-Q2"),
 ):
     try:
-        return await github_service.get_team_contributions(squad=squad, project=project, days=days)
+        return await github_service.get_team_contributions(squad=squad, project=project, quarter=quarter)
     except Exception as e:
         logger.error(f"Error fetching team contributions: {e}")
         return {"error": str(e), "data": None}
@@ -70,9 +72,10 @@ async def team_review_stats(
     squad: str | None = Query(default=None),
     project: str | None = Query(default=None),
     days: int = Query(default=30, le=90),
+    quarter: str | None = Query(default=None, description="Quarter in format YYYY-QN, e.g., 2026-Q2"),
 ):
     try:
-        return await github_service.get_team_review_stats(squad=squad, project=project, days=days)
+        return await github_service.get_team_review_stats(squad=squad, project=project, days=days, quarter=quarter)
     except Exception as e:
         logger.error(f"Error fetching team review stats: {e}")
         return {"error": str(e), "data": None}

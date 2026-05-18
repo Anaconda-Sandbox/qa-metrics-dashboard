@@ -74,8 +74,33 @@ def _projects_jql(squad: str | None = None, project: str | None = None) -> str:
     return f"project in ({', '.join(projects)})"
 
 
-async def get_defect_density(squad: str | None = None, project: str | None = None, use_cache: bool = True) -> DefectDensityResponse:
-    cache_key = f"defect_density:{squad}"
+def _get_quarter_date_range(quarter: str | None) -> tuple[str | None, str | None]:
+    """Parse quarter string and return (start_date, end_date) in YYYY-MM-DD format."""
+    if not quarter:
+        return None, None
+    try:
+        year, q = quarter.split("-Q")
+        year = int(year)
+        q = int(q)
+        quarter_starts = {1: "01-01", 2: "04-01", 3: "07-01", 4: "10-01"}
+        quarter_ends = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+        start = f"{year}-{quarter_starts[q]}"
+        end = f"{year}-{quarter_ends[q]}"
+        return start, end
+    except (ValueError, KeyError):
+        return None, None
+
+
+def _quarter_created_jql(quarter: str | None) -> str:
+    """Return JQL clause for filtering by quarter creation date."""
+    start, end = _get_quarter_date_range(quarter)
+    if start and end:
+        return f" AND created >= '{start}' AND created <= '{end}'"
+    return ""
+
+
+async def get_defect_density(squad: str | None = None, project: str | None = None, quarter: str | None = None, use_cache: bool = True) -> DefectDensityResponse:
+    cache_key = f"defect_density:{squad}:{project}:{quarter}"
 
     if use_cache:
         cached = cache_service.cache_get(cache_key)
@@ -85,15 +110,19 @@ async def get_defect_density(squad: str | None = None, project: str | None = Non
     try:
         fields = "status,priority,project,created,resolutiondate"
 
+        # Build project filter based on squad/project selection
+        project_filter = _projects_jql(squad, project)
+        quarter_filter = _quarter_created_jql(quarter)
+
         # Use membersOf(QA) filter for all bug queries
         qa_filter = "reporter in membersOf(QA)"
         status_filter = 'status != Done AND status != "Closed: No Action"'
 
-        all_bugs_jql = f"type = Bug AND {qa_filter} ORDER BY created DESC"
-        open_bugs_jql = f"type = Bug AND {qa_filter} AND {status_filter} ORDER BY priority ASC"
-        high_prio_jql = f"type = Bug AND {qa_filter} AND priority in (High, Highest) AND {status_filter}"
-        weekly_jql = f"type = Bug AND {qa_filter} AND created >= -7d"
-        monthly_jql = f"type = Bug AND {qa_filter} AND created >= -30d"
+        all_bugs_jql = f"{project_filter} AND type = Bug AND {qa_filter}{quarter_filter} ORDER BY created DESC"
+        open_bugs_jql = f"{project_filter} AND type = Bug AND {qa_filter} AND {status_filter}{quarter_filter} ORDER BY priority ASC"
+        high_prio_jql = f"{project_filter} AND type = Bug AND {qa_filter} AND priority in (High, Highest) AND {status_filter}{quarter_filter}"
+        weekly_jql = f"{project_filter} AND type = Bug AND {qa_filter} AND created >= -7d"
+        monthly_jql = f"{project_filter} AND type = Bug AND {qa_filter} AND created >= -30d"
 
         all_data = await _jql_search(all_bugs_jql, fields, max_results=2000)
         open_data = await _jql_search(open_bugs_jql, fields, max_results=2000)
@@ -150,8 +179,8 @@ def _get_qa_members_reporter_or_assignee_jql() -> str:
     return f"(reporter in ({names_list}) OR assignee in ({names_list}))"
 
 
-async def get_bugs_list(squad: str | None = None, project: str | None = None, limit: int = 1000, use_cache: bool = True) -> BugListResponse:
-    cache_key = f"bugs_list:{squad}"
+async def get_bugs_list(squad: str | None = None, project: str | None = None, limit: int = 1000, quarter: str | None = None, use_cache: bool = True) -> BugListResponse:
+    cache_key = f"bugs_list:{squad}:{project}:{quarter}"
 
     if use_cache:
         cached = cache_service.cache_get(cache_key)
@@ -159,8 +188,12 @@ async def get_bugs_list(squad: str | None = None, project: str | None = None, li
             return BugListResponse(**cached)
 
     try:
+        # Build project filter based on squad/project selection
+        project_filter = _projects_jql(squad, project)
+        quarter_filter = _quarter_created_jql(quarter)
+
         # Use membersOf(QA) for reporter filter and explicit status exclusion
-        jql = 'type = Bug AND reporter in membersOf(QA) AND status != Done AND status != "Closed: No Action" ORDER BY created DESC'
+        jql = f'{project_filter} AND type = Bug AND reporter in membersOf(QA) AND status != Done AND status != "Closed: No Action"{quarter_filter} ORDER BY created DESC'
         fields = "summary,status,priority,created,project,reporter"
         data = await _jql_search(jql, fields, max_results=limit)
 
@@ -187,8 +220,8 @@ async def get_bugs_list(squad: str | None = None, project: str | None = None, li
         raise
 
 
-async def get_open_bugs(limit: int = 20, squad: str | None = None, project: str | None = None) -> BugListResponse:
-    return await get_bugs_list(squad=squad, project=project, limit=limit)
+async def get_open_bugs(limit: int = 20, squad: str | None = None, project: str | None = None, quarter: str | None = None) -> BugListResponse:
+    return await get_bugs_list(squad=squad, project=project, limit=limit, quarter=quarter)
 
 
 async def get_bug_priority_breakdown(squad: str | None = None, project: str | None = None, use_cache: bool = True) -> BugPriorityBreakdown:
@@ -249,8 +282,8 @@ async def get_bug_status_breakdown(squad: str | None = None, project: str | None
         raise
 
 
-async def get_automation_coverage(squad: str | None = None, project: str | None = None, use_cache: bool = True) -> AutomationCoverageResponse:
-    cache_key = f"automation_coverage:{squad}"
+async def get_automation_coverage(squad: str | None = None, project: str | None = None, quarter: str | None = None, use_cache: bool = True) -> AutomationCoverageResponse:
+    cache_key = f"automation_coverage:{squad}:{project}:{quarter}"
 
     if use_cache:
         cached = cache_service.cache_get(cache_key)
@@ -259,17 +292,18 @@ async def get_automation_coverage(squad: str | None = None, project: str | None 
 
     try:
         base = _projects_jql(squad, project)
+        quarter_filter = _quarter_created_jql(quarter)
         fields = "labels,summary"
 
         automated_jql = (
-            f'{base} AND issuetype = Test AND labels in ("Automated", "automation", "qa-automation")'
+            f'{base} AND issuetype = Test AND labels in ("Automated", "automation", "qa-automation"){quarter_filter}'
         )
         not_automated_jql = (
-            f'{base} AND issuetype = Test AND (labels not in ("Automated", "automation", "qa-automation") OR labels is EMPTY)'
+            f'{base} AND issuetype = Test AND (labels not in ("Automated", "automation", "qa-automation") OR labels is EMPTY){quarter_filter}'
         )
 
-        automated_data = await _jql_search(automated_jql, fields)
-        not_automated_data = await _jql_search(not_automated_jql, fields)
+        automated_data = await _jql_search(automated_jql, fields, max_results=2000)
+        not_automated_data = await _jql_search(not_automated_jql, fields, max_results=2000)
 
         automated = automated_data.get("total", 0)
         not_automated = not_automated_data.get("total", 0)
@@ -341,9 +375,9 @@ def _get_qa_members_jql() -> str:
     return f"assignee in ({', '.join(quoted_names)})"
 
 
-async def get_story_points(squad: str | None = None, project: str | None = None, use_cache: bool = True) -> StoryPointsResponse:
+async def get_story_points(squad: str | None = None, project: str | None = None, quarter: str | None = None, use_cache: bool = True) -> StoryPointsResponse:
     """Get story points metrics on quarterly basis - committed, completed, in progress (QA team only)"""
-    cache_key = f"story_points:{squad}"
+    cache_key = f"story_points:{squad}:{project}:{quarter}"
 
     if use_cache:
         cached = cache_service.cache_get(cache_key)
@@ -355,15 +389,32 @@ async def get_story_points(squad: str | None = None, project: str | None = None,
         qa_filter = _get_qa_members_jql()
         fields = f"status,{STORY_POINTS_FIELD},assignee,resolutiondate,created"
 
-        quarter_start, quarter_end, quarter_label = _get_quarter_dates()
-        quarter_start_str = quarter_start.strftime("%Y-%m-%d")
+        # Use provided quarter or default to current quarter
+        if quarter:
+            start_str, end_str = _get_quarter_date_range(quarter)
+            if start_str and end_str:
+                quarter_start_str = start_str
+                quarter_end_str = end_str
+                year, q = quarter.split("-Q")
+                quarter_label = f"Q{q} {year}"
+                # Also create datetime objects for velocity trend calculation
+                quarter_start = datetime.strptime(start_str, "%Y-%m-%d")
+                quarter_end = datetime.strptime(end_str, "%Y-%m-%d")
+            else:
+                quarter_start, quarter_end, quarter_label = _get_quarter_dates()
+                quarter_start_str = quarter_start.strftime("%Y-%m-%d")
+                quarter_end_str = quarter_end.strftime("%Y-%m-%d")
+        else:
+            quarter_start, quarter_end, quarter_label = _get_quarter_dates()
+            quarter_start_str = quarter_start.strftime("%Y-%m-%d")
+            quarter_end_str = quarter_end.strftime("%Y-%m-%d")
 
         # Committed = tickets assigned to QA team, created this quarter with story points
-        jql_committed = f'{base} AND {qa_filter} AND "{STORY_POINTS_FIELD}" is not EMPTY AND created >= "{quarter_start_str}"'
+        jql_committed = f'{base} AND {qa_filter} AND "{STORY_POINTS_FIELD}" is not EMPTY AND created >= "{quarter_start_str}" AND created <= "{quarter_end_str}"'
         committed_data = await _jql_search(jql_committed, fields, max_results=2000)
 
         # Completed = tickets assigned to QA team, resolved this quarter
-        jql_completed = f'{base} AND {qa_filter} AND "{STORY_POINTS_FIELD}" is not EMPTY AND resolved >= "{quarter_start_str}"'
+        jql_completed = f'{base} AND {qa_filter} AND "{STORY_POINTS_FIELD}" is not EMPTY AND resolved >= "{quarter_start_str}" AND resolved <= "{quarter_end_str}"'
         completed_data = await _jql_search(jql_completed, fields, max_results=2000)
 
         # In Progress = tickets assigned to QA team, currently in progress

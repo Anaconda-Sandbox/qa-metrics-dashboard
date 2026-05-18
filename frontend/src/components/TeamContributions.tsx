@@ -15,11 +15,12 @@ const MEMBER_COLORS = [
 ];
 
 interface Props {
-  squad: string | null;
+  project: string | null;
+  quarter?: string;
 }
 
-export default function TeamContributions({ squad }: Props) {
-  const { data, isLoading, error } = useTeamContributions(squad, null, 30);
+export default function TeamContributions({ project, quarter }: Props) {
+  const { data, isLoading, error } = useTeamContributions(null, project, quarter);
 
   if (isLoading) {
     return (
@@ -64,7 +65,7 @@ export default function TeamContributions({ squad }: Props) {
     return (
       <div className="rounded-2xl bg-[#0f1419] border border-[#1e2a3a]/60 p-6">
         <h3 className="text-sm font-medium text-[#64748b] mb-2">Team Contributions</h3>
-        <p className="text-sm text-[#64748b]">No QA team activity in the last 30 days</p>
+        <p className="text-sm text-[#64748b]">No QA team activity for this period</p>
       </div>
     );
   }
@@ -83,7 +84,7 @@ export default function TeamContributions({ squad }: Props) {
             QA Team Contributions
           </h3>
           <p className="text-xs text-[#64748b] mt-0.5">
-            Last 30 days &middot; {data.total_prs} PRs total
+            {quarter ? quarter.replace("-", " ") : "Last 30 days"} &middot; {data.total_prs} PRs total
           </p>
         </div>
         <div className="px-3 py-1 rounded-full bg-[#6366f1]/10 border border-[#6366f1]/20">

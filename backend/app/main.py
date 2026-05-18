@@ -5,8 +5,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import SQUAD_CONFIG, ALL_JIRA_PROJECTS, ALL_QA_MEMBERS, get_settings
-from app.models.metrics import DashboardConfigResponse, SquadInfo
+from app.config import SQUAD_CONFIG, PROJECT_CONFIG, ALL_JIRA_PROJECTS, ALL_QA_MEMBERS, get_settings
+from app.models.metrics import DashboardConfigResponse, SquadInfo, ProjectInfo
 from app.routers import github, jira, members, reportportal
 from app.services import github_service, jira_service, reportportal_service, cache_service
 from app.services.scheduler_service import start_scheduler, stop_scheduler, get_scheduler_status
@@ -79,7 +79,15 @@ async def get_config():
         )
         for key, cfg in SQUAD_CONFIG.items()
     ]
-    return DashboardConfigResponse(squads=squads, all_jira_projects=ALL_JIRA_PROJECTS, all_members=ALL_QA_MEMBERS)
+    projects = [
+        ProjectInfo(
+            key=key,
+            name=cfg["name"],
+            repos=cfg["repos"],
+        )
+        for key, cfg in PROJECT_CONFIG.items()
+    ]
+    return DashboardConfigResponse(squads=squads, projects=projects, all_jira_projects=ALL_JIRA_PROJECTS, all_members=ALL_QA_MEMBERS)
 
 
 @app.get("/api/metrics/all")

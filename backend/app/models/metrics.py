@@ -9,8 +9,15 @@ class SquadInfo(BaseModel):
     members: list[str]
 
 
+class ProjectInfo(BaseModel):
+    key: str
+    name: str
+    repos: list[str]
+
+
 class DashboardConfigResponse(BaseModel):
     squads: list[SquadInfo] = []
+    projects: list[ProjectInfo] = []
     all_jira_projects: list[str] = []
     all_members: list[str] = []
 

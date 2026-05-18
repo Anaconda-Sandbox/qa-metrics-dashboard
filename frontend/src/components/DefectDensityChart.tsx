@@ -18,11 +18,12 @@ const PRIORITY_COLORS: Record<string, string> = {
 };
 
 interface Props {
-  squad: string | null;
+  project: string | null;
+  quarter?: string;
 }
 
-export default function DefectDensityChart({ squad }: Props) {
-  const { data, isLoading, error } = useDefectDensity(squad);
+export default function DefectDensityChart({ project, quarter }: Props) {
+  const { data, isLoading, error } = useDefectDensity(null, project, quarter);
 
   if (isLoading) {
     return (

@@ -18,14 +18,15 @@ import {
 } from "../hooks/useMetrics";
 
 interface Props {
-  squad: string | null;
+  project: string | null;
+  quarter: string;
 }
 
-export default function UnifiedDashboard({ squad }: Props) {
-  const { data: density, isLoading: densityLoading, error: densityError } = useDefectDensity(squad);
-  const { data: coverage, isLoading: coverageLoading, error: coverageError } = useAutomationCoverage(squad);
+export default function UnifiedDashboard({ project, quarter }: Props) {
+  const { data: density, isLoading: densityLoading, error: densityError } = useDefectDensity(null, project, quarter);
+  const { data: coverage, isLoading: coverageLoading, error: coverageError } = useAutomationCoverage(null, project);
   const { data: rpStats, isLoading: rpLoading, error: rpError } = useReportPortalStats();
-  const { data: prStats, isLoading: prLoading, error: prError } = usePRStats(squad);
+  const { data: prStats, isLoading: prLoading, error: prError } = usePRStats(null, project, quarter);
   const { data: flaky, isLoading: flakyLoading } = useFlakyTests(10);
 
   const openBugs = density?.open_bugs ?? 0;
@@ -33,6 +34,8 @@ export default function UnifiedDashboard({ squad }: Props) {
   const coveragePercent = coverage?.coverage_percentage ?? 0;
   const passRate = rpStats?.avg_pass_rate ?? 0;
   const flakyCount = flaky?.total ?? 0;
+
+  const periodLabel = quarter ? quarter.replace("-", " ") : "Last 30 days";
 
   return (
     <div className="space-y-6">
@@ -65,7 +68,7 @@ export default function UnifiedDashboard({ squad }: Props) {
         <KPICard
           title="PRs Merged"
           value={prStats?.merged_prs_last_30d ?? 0}
-          subtitle="Last 30 days"
+          subtitle={periodLabel}
           color="blue"
           loading={prLoading}
           error={prError ? "Unavailable" : undefined}
@@ -73,7 +76,7 @@ export default function UnifiedDashboard({ squad }: Props) {
         <KPICard
           title="PRs Opened"
           value={prStats?.total_prs_last_30d ?? 0}
-          subtitle="Last 30 days"
+          subtitle={periodLabel}
           color="blue"
           loading={prLoading}
           error={prError ? "Unavailable" : undefined}
@@ -97,7 +100,7 @@ export default function UnifiedDashboard({ squad }: Props) {
         }
         badge="Quarterly"
       >
-        <StoryPointsChart squad={squad} />
+        <StoryPointsChart project={project} quarter={quarter} />
       </DashboardSection>
 
       {/* Quality Metrics Section */}
@@ -110,8 +113,8 @@ export default function UnifiedDashboard({ squad }: Props) {
         }
       >
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <DefectDensityChart squad={squad} />
-          <AutomationCoverageChart squad={squad} />
+          <DefectDensityChart project={project} quarter={quarter} />
+          <AutomationCoverageChart project={project} />
         </div>
       </DashboardSection>
 
@@ -126,8 +129,8 @@ export default function UnifiedDashboard({ squad }: Props) {
         badge="PRs & Reviews"
       >
         <div className="space-y-6">
-          <TeamContributions squad={squad} />
-          <PRTrendsChart squad={squad} />
+          <TeamContributions project={project} quarter={quarter} />
+          <PRTrendsChart project={project} quarter={quarter} />
         </div>
       </DashboardSection>
 
@@ -142,7 +145,7 @@ export default function UnifiedDashboard({ squad }: Props) {
         }
         badge="Human & AI"
       >
-        <TeamReviewStats squad={squad} />
+        <TeamReviewStats project={project} quarter={quarter} />
       </DashboardSection>
 
       {/* Test Results Section */}
@@ -170,7 +173,7 @@ export default function UnifiedDashboard({ squad }: Props) {
         }
         badge={openBugs > 0 ? `${openBugs} open` : undefined}
       >
-        <BugTable squad={squad} />
+        <BugTable project={project} quarter={quarter} />
       </DashboardSection>
     </div>
   );

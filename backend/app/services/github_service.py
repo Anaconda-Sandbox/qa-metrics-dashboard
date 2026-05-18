@@ -61,6 +61,7 @@ async def _fetch_prs_for_repo(client: httpx.AsyncClient, org: str, repo: str) ->
 async def _fetch_all_prs(squad: str | None, project: str | None) -> list[dict]:
     settings = get_settings()
     repos = settings.repos_for_filter(squad, project)
+    members = settings.members_for_filter(squad, project)
     all_prs: list[dict] = []
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -74,11 +75,11 @@ async def _fetch_all_prs(squad: str | None, project: str | None) -> list[dict]:
                 logger.error(f"GitHub API error fetching PRs for {repo}: {e}")
                 continue
 
-    return _filter_by_members(all_prs, ALL_QA_MEMBERS)
+    return _filter_by_members(all_prs, members)
 
 
-async def get_pr_trends(squad: str | None = None, project: str | None = None, use_cache: bool = True) -> PRTrendsResponse:
-    cache_key = f"pr_trends:{squad}"
+async def get_pr_trends(squad: str | None = None, project: str | None = None, quarter: str | None = None, use_cache: bool = True) -> PRTrendsResponse:
+    cache_key = f"pr_trends:{squad}:{project}:{quarter}"
 
     if use_cache:
         cached = cache_service.cache_get(cache_key)
@@ -88,8 +89,7 @@ async def get_pr_trends(squad: str | None = None, project: str | None = None, us
     try:
         all_prs = await _fetch_all_prs(squad, project)
 
-        now = datetime.now(timezone.utc)
-        twelve_weeks_ago = now - timedelta(weeks=12)
+        start_date, end_date, _ = _get_quarter_dates(quarter)
 
         weekly_opened: dict[str, int] = defaultdict(int)
         weekly_merged: dict[str, int] = defaultdict(int)
@@ -98,14 +98,14 @@ async def get_pr_trends(squad: str | None = None, project: str | None = None, us
             created = pr.get("created_at", "")
             if created:
                 created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                if created_dt >= twelve_weeks_ago:
+                if start_date <= created_dt <= end_date:
                     week = created_dt.strftime("%G-W%V")
                     weekly_opened[week] += 1
 
             merged = pr.get("merged_at")
             if merged:
                 merged_dt = datetime.fromisoformat(merged.replace("Z", "+00:00"))
-                if merged_dt >= twelve_weeks_ago:
+                if start_date <= merged_dt <= end_date:
                     week = merged_dt.strftime("%G-W%V")
                     weekly_merged[week] += 1
 
@@ -131,8 +131,8 @@ async def get_pr_trends(squad: str | None = None, project: str | None = None, us
         raise
 
 
-async def get_pr_stats(squad: str | None = None, project: str | None = None, use_cache: bool = True) -> PRStats:
-    cache_key = f"pr_stats:{squad}"
+async def get_pr_stats(squad: str | None = None, project: str | None = None, quarter: str | None = None, use_cache: bool = True) -> PRStats:
+    cache_key = f"pr_stats:{squad}:{project}:{quarter}"
 
     if use_cache:
         cached = cache_service.cache_get(cache_key)
@@ -144,11 +144,10 @@ async def get_pr_stats(squad: str | None = None, project: str | None = None, use
         all_prs = await _fetch_all_prs(squad, project)
         repos = settings.repos_for_filter(squad, project)
 
-        now = datetime.now(timezone.utc)
-        thirty_days_ago = now - timedelta(days=30)
+        start_date, end_date, _ = _get_quarter_dates(quarter)
 
-        total_30d = 0
-        merged_30d = 0
+        total_count = 0
+        merged_count = 0
         review_turnarounds: list[float] = []
 
         for pr in all_prs:
@@ -156,12 +155,12 @@ async def get_pr_stats(squad: str | None = None, project: str | None = None, use
             if not created:
                 continue
             created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-            if created_dt < thirty_days_ago:
+            if not (start_date <= created_dt <= end_date):
                 continue
 
-            total_30d += 1
+            total_count += 1
             if pr.get("merged_at"):
-                merged_30d += 1
+                merged_count += 1
                 merged_dt = datetime.fromisoformat(pr["merged_at"].replace("Z", "+00:00"))
                 turnaround = (merged_dt - created_dt).total_seconds() / 3600
                 review_turnarounds.append(turnaround)
@@ -173,8 +172,8 @@ async def get_pr_stats(squad: str | None = None, project: str | None = None, use
         )
 
         result = PRStats(
-            total_prs_last_30d=total_30d,
-            merged_prs_last_30d=merged_30d,
+            total_prs_last_30d=total_count,
+            merged_prs_last_30d=merged_count,
             avg_review_turnaround_hours=avg_turnaround,
             repos=repos,
         )
@@ -187,7 +186,7 @@ async def get_pr_stats(squad: str | None = None, project: str | None = None, use
 
 
 async def get_recent_prs(limit: int = 10, squad: str | None = None, project: str | None = None, use_cache: bool = True) -> RecentPRsResponse:
-    cache_key = f"recent_prs:{squad}:{limit}"
+    cache_key = f"recent_prs:{squad}:{project}:{limit}"
 
     if use_cache:
         cached = cache_service.cache_get(cache_key)
@@ -197,6 +196,7 @@ async def get_recent_prs(limit: int = 10, squad: str | None = None, project: str
     try:
         settings = get_settings()
         repos = settings.repos_for_filter(squad, project)
+        members = settings.members_for_filter(squad, project)
         all_prs: list[dict] = []
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -214,7 +214,7 @@ async def get_recent_prs(limit: int = 10, squad: str | None = None, project: str
                     logger.error(f"GitHub API error fetching recent PRs for {repo}: {e}")
                     continue
 
-        all_prs = _filter_by_members(all_prs, ALL_QA_MEMBERS)
+        all_prs = _filter_by_members(all_prs, members)
         all_prs.sort(key=lambda p: p.get("created_at", ""), reverse=True)
         all_prs = all_prs[:limit]
 
@@ -240,8 +240,8 @@ async def get_recent_prs(limit: int = 10, squad: str | None = None, project: str
         raise
 
 
-async def get_team_contributions(squad: str | None = None, project: str | None = None, days: int = 30, use_cache: bool = True) -> TeamContributionResponse:
-    cache_key = f"team_contributions:{squad}"
+async def get_team_contributions(squad: str | None = None, project: str | None = None, quarter: str | None = None, use_cache: bool = True) -> TeamContributionResponse:
+    cache_key = f"team_contributions:{squad}:{project}:{quarter}"
 
     if use_cache:
         cached = cache_service.cache_get(cache_key)
@@ -251,12 +251,11 @@ async def get_team_contributions(squad: str | None = None, project: str | None =
     try:
         all_prs = await _fetch_all_prs(squad, project)
 
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(days=days)
+        start_date, end_date, _ = _get_quarter_dates(quarter)
         all_prs = [
             pr for pr in all_prs
             if pr.get("created_at") and
-               datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00")) >= cutoff
+               start_date <= datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00")) <= end_date
         ]
 
         member_data: dict[str, dict] = defaultdict(lambda: {
@@ -294,8 +293,10 @@ async def get_team_contributions(squad: str | None = None, project: str | None =
         members.sort(key=lambda m: m.prs_opened, reverse=True)
         total_prs = sum(m.prs_opened for m in members)
 
+        # Calculate period days from quarter
+        period_days = (end_date - start_date).days
         result = TeamContributionResponse(
-            members=members, total_prs=total_prs, period_days=days
+            members=members, total_prs=total_prs, period_days=period_days
         )
         cache_service.cache_set(cache_key, result.model_dump(), ttl=900)
         return result
@@ -305,8 +306,43 @@ async def get_team_contributions(squad: str | None = None, project: str | None =
         raise
 
 
-async def get_team_review_stats(squad: str | None = None, project: str | None = None, days: int = 30, use_cache: bool = True) -> TeamReviewStatsResponse:
-    cache_key = f"team_review_stats:{squad}"
+def _get_quarter_dates(quarter: str | None) -> tuple[datetime, datetime, str]:
+    """Parse quarter string (e.g., '2026-Q2') and return start_date, end_date, cutoff_str."""
+    now = datetime.now(timezone.utc)
+
+    if quarter:
+        try:
+            year, q = quarter.split("-Q")
+            year = int(year)
+            q = int(q)
+            quarter_starts = {
+                1: (1, 1),   # Jan 1
+                2: (4, 1),   # Apr 1
+                3: (7, 1),   # Jul 1
+                4: (10, 1),  # Oct 1
+            }
+            quarter_ends = {
+                1: (3, 31),  # Mar 31
+                2: (6, 30),  # Jun 30
+                3: (9, 30),  # Sep 30
+                4: (12, 31), # Dec 31
+            }
+            start_month, start_day = quarter_starts[q]
+            end_month, end_day = quarter_ends[q]
+            start_date = datetime(year, start_month, start_day, tzinfo=timezone.utc)
+            end_date = datetime(year, end_month, end_day, 23, 59, 59, tzinfo=timezone.utc)
+            cutoff_str = start_date.strftime("%Y-%m-%d")
+            return start_date, end_date, cutoff_str
+        except (ValueError, KeyError):
+            pass
+
+    # Default: last 30 days
+    cutoff = now - timedelta(days=30)
+    return cutoff, now, cutoff.strftime("%Y-%m-%d")
+
+
+async def get_team_review_stats(squad: str | None = None, project: str | None = None, days: int = 30, quarter: str | None = None, use_cache: bool = True) -> TeamReviewStatsResponse:
+    cache_key = f"team_review_stats:{squad}:{project}:{quarter}"
 
     if use_cache:
         cached = cache_service.cache_get(cache_key)
@@ -315,9 +351,11 @@ async def get_team_review_stats(squad: str | None = None, project: str | None = 
 
     try:
         settings = get_settings()
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(days=days)
-        cutoff_str = cutoff.strftime("%Y-%m-%d")
+        start_date, end_date, cutoff_str = _get_quarter_dates(quarter)
+
+        repos = settings.repos_for_filter(squad, project)
+        members = settings.members_for_filter(squad, project)
+        repos_set = set(repos)
 
         reviewer_data: dict[str, dict] = defaultdict(lambda: {
             "reviews_given": 0, "approvals": 0, "changes_requested": 0, "comments": 0, "prs_reviewed": set()
@@ -348,20 +386,50 @@ async def get_team_review_stats(squad: str | None = None, project: str | None = 
                         pr_number = pr.get("number", 0)
                         repo_url = pr.get("repository_url", "")
                         repo_name = repo_url.split("/")[-1] if repo_url else "unknown"
+
+                        # Filter by squad repos
+                        if repo_name not in repos_set:
+                            continue
+
                         pr_key = f"{repo_name}:{pr_number}"
 
                         if pr_key in reviewer_data[bot]["prs_reviewed"]:
                             continue
 
-                        reviewer_data[bot]["prs_reviewed"].add(pr_key)
-                        reviewer_data[bot]["reviews_given"] += 1
-                        reviewer_data[bot]["approvals"] += 1
+                        # Fetch actual review state for bot
+                        try:
+                            reviews_url = f"https://api.github.com/repos/{settings.github_org}/{repo_name}/pulls/{pr_number}/reviews"
+                            reviews_resp = await client.get(reviews_url, headers=_headers())
+                            if reviews_resp.status_code == 200:
+                                reviews = reviews_resp.json()
+                                bot_state = None
+                                bot_submitted = None
+                                for review in reviews:
+                                    reviewer = review.get("user", {}).get("login", "")
+                                    if reviewer.lower() == bot.lower():
+                                        bot_state = review.get("state", "COMMENTED")
+                                        bot_submitted = review.get("submitted_at")
+                                        break
 
-                        updated = pr.get("updated_at", "")
-                        if updated:
-                            updated_dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-                            week = updated_dt.strftime("%G-W%V")
-                            weekly_reviews[week] += 1
+                                if bot_state and bot_submitted:
+                                    submitted_dt = datetime.fromisoformat(bot_submitted.replace("Z", "+00:00"))
+                                    # Filter by date range
+                                    if submitted_dt < start_date or submitted_dt > end_date:
+                                        continue
+
+                                    reviewer_data[bot]["prs_reviewed"].add(pr_key)
+                                    reviewer_data[bot]["reviews_given"] += 1
+                                    if bot_state == "APPROVED":
+                                        reviewer_data[bot]["approvals"] += 1
+                                    elif bot_state == "CHANGES_REQUESTED":
+                                        reviewer_data[bot]["changes_requested"] += 1
+                                    else:
+                                        reviewer_data[bot]["comments"] += 1
+
+                                    week = submitted_dt.strftime("%G-W%V")
+                                    weekly_reviews[week] += 1
+                        except httpx.HTTPError:
+                            pass
 
                     await asyncio.sleep(2.5)
 
@@ -369,8 +437,8 @@ async def get_team_review_stats(squad: str | None = None, project: str | None = 
                     logger.error(f"Error fetching bot reviews for {bot}: {e}")
                     continue
 
-            # Now query human QA members
-            for member in ALL_QA_MEMBERS:
+            # Now query human QA members (filtered by squad)
+            for member in members:
                 try:
                     search_query = f"is:pr reviewed-by:{member} org:{settings.github_org} updated:>={cutoff_str}"
                     search_url = "https://api.github.com/search/issues"
@@ -393,6 +461,11 @@ async def get_team_review_stats(squad: str | None = None, project: str | None = 
                         pr_number = pr.get("number", 0)
                         repo_url = pr.get("repository_url", "")
                         repo_name = repo_url.split("/")[-1] if repo_url else "unknown"
+
+                        # Filter by squad repos
+                        if repo_name not in repos_set:
+                            continue
+
                         pr_key = f"{repo_name}:{pr_number}"
 
                         if pr_key in reviewer_data[member]["prs_reviewed"]:
@@ -417,7 +490,8 @@ async def get_team_review_stats(squad: str | None = None, project: str | None = 
                                 if not submitted_at:
                                     continue
                                 submitted_dt = datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
-                                if submitted_dt < cutoff:
+                                # Filter by date range
+                                if submitted_dt < start_date or submitted_dt > end_date:
                                     continue
 
                                 state = review.get("state", "COMMENTED")
