@@ -165,7 +165,7 @@ export default function StoryPointsChart({ squad }: { squad: string | null }) {
         </div>
       </div>
 
-      {/* Current Sprint Info */}
+      {/* Current Quarter Info */}
       {data?.current_sprint && (
         <div className="rounded-xl bg-[#0f1419] border border-[#1e2a3a]/60 p-4">
           <div className="flex items-center justify-between">
@@ -177,8 +177,8 @@ export default function StoryPointsChart({ squad }: { squad: string | null }) {
                 {data.current_sprint.end_date && new Date(data.current_sprint.end_date).toLocaleDateString()}
               </p>
             </div>
-            <span className="px-3 py-1 text-xs font-medium bg-emerald-500/20 text-emerald-300 rounded-full border border-emerald-500/30">
-              Active Sprint
+            <span className="px-3 py-1 text-xs font-medium bg-indigo-500/20 text-indigo-300 rounded-full border border-indigo-500/30">
+              Current Quarter
             </span>
           </div>
         </div>
@@ -189,10 +189,10 @@ export default function StoryPointsChart({ squad }: { squad: string | null }) {
         {/* Velocity Trend */}
         <div className="rounded-2xl bg-[#0f1419] border border-[#1e2a3a]/60 p-6">
           <h3 className="text-base font-semibold text-[#e2e8f0] mb-4">
-            Sprint Velocity Trend
+            Weekly Velocity Trend
           </h3>
           {velocityData.length === 0 ? (
-            <p className="text-sm text-[#64748b] text-center py-8">No sprint data available</p>
+            <p className="text-sm text-[#64748b] text-center py-8">No velocity data available</p>
           ) : (
             <ResponsiveContainer width="100%" height={250}>
               <ComposedChart data={velocityData}>

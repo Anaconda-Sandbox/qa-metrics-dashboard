@@ -83,23 +83,27 @@ async def get_defect_density(squad: str | None = None, project: str | None = Non
             return DefectDensityResponse(**cached)
 
     try:
-        base = _projects_jql(squad, project)
         fields = "status,priority,project,created,resolutiondate"
 
-        all_bugs_jql = f"{base} AND issuetype = Bug ORDER BY created DESC"
-        open_bugs_jql = f"{base} AND issuetype = Bug AND statusCategory != Done ORDER BY priority ASC"
-        high_prio_jql = f"{base} AND issuetype = Bug AND priority in (High, Highest) AND statusCategory != Done"
-        weekly_jql = f"{base} AND issuetype = Bug AND created >= -7d"
-        monthly_jql = f"{base} AND issuetype = Bug AND created >= -30d"
+        # Use membersOf(QA) filter for all bug queries
+        qa_filter = "reporter in membersOf(QA)"
+        status_filter = 'status != Done AND status != "Closed: No Action"'
 
-        all_data = await _jql_search(all_bugs_jql, fields, max_results=500)
-        open_data = await _jql_search(open_bugs_jql, fields, max_results=500)
-        high_data = await _jql_search(high_prio_jql, fields)
-        weekly_data = await _jql_search(weekly_jql, fields)
-        monthly_data = await _jql_search(monthly_jql, fields)
+        all_bugs_jql = f"type = Bug AND {qa_filter} ORDER BY created DESC"
+        open_bugs_jql = f"type = Bug AND {qa_filter} AND {status_filter} ORDER BY priority ASC"
+        high_prio_jql = f"type = Bug AND {qa_filter} AND priority in (High, Highest) AND {status_filter}"
+        weekly_jql = f"type = Bug AND {qa_filter} AND created >= -7d"
+        monthly_jql = f"type = Bug AND {qa_filter} AND created >= -30d"
 
-        total_bugs = all_data.get("total", 0)
-        open_bugs = open_data.get("total", 0)
+        all_data = await _jql_search(all_bugs_jql, fields, max_results=2000)
+        open_data = await _jql_search(open_bugs_jql, fields, max_results=2000)
+        high_data = await _jql_search(high_prio_jql, fields, max_results=500)
+        weekly_data = await _jql_search(weekly_jql, fields, max_results=500)
+        monthly_data = await _jql_search(monthly_jql, fields, max_results=500)
+
+        # Count from actual issues returned (since total may not be accurate with new API)
+        total_bugs = len(all_data.get("issues", []))
+        open_bugs = len(open_data.get("issues", []))
         closed_bugs = total_bugs - open_bugs
 
         by_project: dict[str, int] = defaultdict(int)
@@ -115,6 +119,9 @@ async def get_defect_density(squad: str | None = None, project: str | None = Non
             by_priority[priority] += 1
             by_status[status] += 1
 
+        # Count high priority from actual issues
+        open_high_priority = len(high_data.get("issues", []))
+
         result = DefectDensityResponse(
             total_bugs=total_bugs,
             open_bugs=open_bugs,
@@ -122,9 +129,9 @@ async def get_defect_density(squad: str | None = None, project: str | None = Non
             by_project=dict(by_project),
             by_priority=dict(by_priority),
             by_status=dict(by_status),
-            open_high_priority=high_data.get("total", 0),
-            weekly_inflow=weekly_data.get("total", 0),
-            monthly_inflow=monthly_data.get("total", 0),
+            open_high_priority=open_high_priority,
+            weekly_inflow=len(weekly_data.get("issues", [])),
+            monthly_inflow=len(monthly_data.get("issues", [])),
         )
 
         cache_service.cache_set(cache_key, result.model_dump(), ttl=900)
@@ -135,7 +142,15 @@ async def get_defect_density(squad: str | None = None, project: str | None = Non
         raise
 
 
-async def get_bugs_list(squad: str | None = None, project: str | None = None, limit: int = 50, use_cache: bool = True) -> BugListResponse:
+def _get_qa_members_reporter_or_assignee_jql() -> str:
+    """Build JQL clause to filter by QA team members as reporter OR assignee"""
+    jira_names = [GITHUB_TO_JIRA_NAME.get(m, m) for m in ALL_QA_MEMBERS]
+    quoted_names = [f'"{name}"' for name in jira_names]
+    names_list = ', '.join(quoted_names)
+    return f"(reporter in ({names_list}) OR assignee in ({names_list}))"
+
+
+async def get_bugs_list(squad: str | None = None, project: str | None = None, limit: int = 1000, use_cache: bool = True) -> BugListResponse:
     cache_key = f"bugs_list:{squad}"
 
     if use_cache:
@@ -144,8 +159,8 @@ async def get_bugs_list(squad: str | None = None, project: str | None = None, li
             return BugListResponse(**cached)
 
     try:
-        base = _projects_jql(squad, project)
-        jql = f"{base} AND issuetype = Bug AND statusCategory != Done ORDER BY priority ASC"
+        # Use membersOf(QA) for reporter filter and explicit status exclusion
+        jql = 'type = Bug AND reporter in membersOf(QA) AND status != Done AND status != "Closed: No Action" ORDER BY created DESC'
         fields = "summary,status,priority,created,project,reporter"
         data = await _jql_search(jql, fields, max_results=limit)
 
@@ -303,8 +318,31 @@ async def get_automation_coverage(squad: str | None = None, project: str | None 
         raise
 
 
+def _get_quarter_dates() -> tuple[datetime, datetime, str]:
+    """Get current quarter start/end dates and label"""
+    now = datetime.now()
+    quarter = (now.month - 1) // 3 + 1
+    quarter_start_month = (quarter - 1) * 3 + 1
+    quarter_start = datetime(now.year, quarter_start_month, 1)
+
+    if quarter == 4:
+        quarter_end = datetime(now.year + 1, 1, 1) - timedelta(days=1)
+    else:
+        quarter_end = datetime(now.year, quarter_start_month + 3, 1) - timedelta(days=1)
+
+    quarter_label = f"Q{quarter} {now.year}"
+    return quarter_start, quarter_end, quarter_label
+
+
+def _get_qa_members_jql() -> str:
+    """Build JQL clause to filter by QA team members"""
+    jira_names = [GITHUB_TO_JIRA_NAME.get(m, m) for m in ALL_QA_MEMBERS]
+    quoted_names = [f'"{name}"' for name in jira_names]
+    return f"assignee in ({', '.join(quoted_names)})"
+
+
 async def get_story_points(squad: str | None = None, project: str | None = None, use_cache: bool = True) -> StoryPointsResponse:
-    """Get story points metrics - completed, in progress, and weekly trends"""
+    """Get story points metrics on quarterly basis - committed, completed, in progress (QA team only)"""
     cache_key = f"story_points:{squad}"
 
     if use_cache:
@@ -314,22 +352,67 @@ async def get_story_points(squad: str | None = None, project: str | None = None,
 
     try:
         base = _projects_jql(squad, project)
+        qa_filter = _get_qa_members_jql()
         fields = f"status,{STORY_POINTS_FIELD},assignee,resolutiondate,created"
 
-        # Get all issues with story points from last 90 days
-        jql_all = f'{base} AND "{STORY_POINTS_FIELD}" is not EMPTY AND updated >= -90d'
-        all_data = await _jql_search(jql_all, fields, max_results=500)
+        quarter_start, quarter_end, quarter_label = _get_quarter_dates()
+        quarter_start_str = quarter_start.strftime("%Y-%m-%d")
+
+        # Committed = tickets assigned to QA team, created this quarter with story points
+        jql_committed = f'{base} AND {qa_filter} AND "{STORY_POINTS_FIELD}" is not EMPTY AND created >= "{quarter_start_str}"'
+        committed_data = await _jql_search(jql_committed, fields, max_results=2000)
+
+        # Completed = tickets assigned to QA team, resolved this quarter
+        jql_completed = f'{base} AND {qa_filter} AND "{STORY_POINTS_FIELD}" is not EMPTY AND resolved >= "{quarter_start_str}"'
+        completed_data = await _jql_search(jql_completed, fields, max_results=2000)
+
+        # In Progress = tickets assigned to QA team, currently in progress
+        jql_in_progress = f'{base} AND {qa_filter} AND "{STORY_POINTS_FIELD}" is not EMPTY AND statusCategory = "In Progress"'
+        in_progress_data = await _jql_search(jql_in_progress, fields, max_results=2000)
 
         # Calculate totals
-        total_completed = 0.0
-        total_in_progress = 0.0
-        total_committed = 0.0
+        total_committed = sum(
+            float(issue.get("fields", {}).get(STORY_POINTS_FIELD) or 0)
+            for issue in committed_data.get("issues", [])
+        )
+        total_completed = sum(
+            float(issue.get("fields", {}).get(STORY_POINTS_FIELD) or 0)
+            for issue in completed_data.get("issues", [])
+        )
+        total_in_progress = sum(
+            float(issue.get("fields", {}).get(STORY_POINTS_FIELD) or 0)
+            for issue in in_progress_data.get("issues", [])
+        )
 
-        # Weekly velocity tracking (last 12 weeks)
+        # Weekly velocity tracking for the quarter
         weekly_completed: dict[str, float] = defaultdict(float)
         weekly_committed: dict[str, float] = defaultdict(float)
 
-        # Per-member tracking
+        for issue in committed_data.get("issues", []):
+            f = issue.get("fields", {})
+            points = float(f.get(STORY_POINTS_FIELD) or 0)
+            created = f.get("created", "")
+            if created and points > 0:
+                try:
+                    dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    week_key = dt.strftime("%Y-W%W")
+                    weekly_committed[week_key] += points
+                except:
+                    pass
+
+        for issue in completed_data.get("issues", []):
+            f = issue.get("fields", {})
+            points = float(f.get(STORY_POINTS_FIELD) or 0)
+            resolution_date = f.get("resolutiondate", "")
+            if resolution_date and points > 0:
+                try:
+                    dt = datetime.fromisoformat(resolution_date.replace("Z", "+00:00"))
+                    week_key = dt.strftime("%Y-W%W")
+                    weekly_completed[week_key] += points
+                except:
+                    pass
+
+        # Per-member tracking (this quarter's completed work)
         members_points: dict[str, MemberStoryPoints] = {}
         for github_name in ALL_QA_MEMBERS:
             jira_name = GITHUB_TO_JIRA_NAME.get(github_name, github_name)
@@ -338,67 +421,52 @@ async def get_story_points(squad: str | None = None, project: str | None = None,
                 jira_name=jira_name,
             )
 
-        for issue in all_data.get("issues", []):
+        # Track completed points per member
+        for issue in completed_data.get("issues", []):
             f = issue.get("fields", {})
             points = float(f.get(STORY_POINTS_FIELD) or 0)
             if points == 0:
                 continue
-
-            status_category = f.get("status", {}).get("statusCategory", {}).get("key", "")
-            created = f.get("created", "")
-            resolution_date = f.get("resolutiondate", "")
-
-            total_committed += points
-
-            # Get week for tracking
-            if resolution_date and status_category == "done":
-                try:
-                    dt = datetime.fromisoformat(resolution_date.replace("Z", "+00:00"))
-                    week_key = dt.strftime("%Y-W%W")
-                    weekly_completed[week_key] += points
-                except:
-                    pass
-                total_completed += points
-            elif status_category == "indeterminate":
-                total_in_progress += points
-
-            # Track by week created for committed
-            if created:
-                try:
-                    dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                    week_key = dt.strftime("%Y-W%W")
-                    weekly_committed[week_key] += points
-                except:
-                    pass
-
-            # Per-member breakdown
             assignee = f.get("assignee", {})
             if assignee:
                 assignee_name = assignee.get("displayName", "").lower()
                 if assignee_name in members_points:
                     member = members_points[assignee_name]
+                    member.completed_points += points
+                    member.issues_completed += 1
                     member.total_issues += 1
-                    if status_category == "done":
-                        member.completed_points += points
-                        member.issues_completed += 1
-                    elif status_category == "indeterminate":
-                        member.in_progress_points += points
 
-        # Build velocity trend (last 8 weeks)
+        # Track in-progress points per member
+        for issue in in_progress_data.get("issues", []):
+            f = issue.get("fields", {})
+            points = float(f.get(STORY_POINTS_FIELD) or 0)
+            if points == 0:
+                continue
+            assignee = f.get("assignee", {})
+            if assignee:
+                assignee_name = assignee.get("displayName", "").lower()
+                if assignee_name in members_points:
+                    member = members_points[assignee_name]
+                    member.in_progress_points += points
+                    member.total_issues += 1
+
+        # Build velocity trend (weeks in current quarter)
         velocity_trend = []
         now = datetime.now()
-        for i in range(7, -1, -1):
-            week_start = now - timedelta(weeks=i)
+        weeks_in_quarter = int((now - quarter_start).days / 7) + 1
+        for i in range(min(weeks_in_quarter, 13)):
+            week_start = quarter_start + timedelta(weeks=i)
+            if week_start > now:
+                break
             week_key = week_start.strftime("%Y-W%W")
+            committed = weekly_committed.get(week_key, 0)
+            completed = weekly_completed.get(week_key, 0)
             velocity_trend.append(SprintVelocity(
                 sprint_name=week_key,
                 sprint_id=i,
-                committed_points=weekly_committed.get(week_key, 0),
-                completed_points=weekly_completed.get(week_key, 0),
-                completion_rate=round(
-                    (weekly_completed.get(week_key, 0) / weekly_committed.get(week_key, 1)) * 100
-                    if weekly_committed.get(week_key, 0) > 0 else 0, 1
-                ),
+                committed_points=committed,
+                completed_points=completed,
+                completion_rate=round((completed / committed * 100) if committed > 0 else 0, 1),
                 start_date=week_start.isoformat(),
                 end_date=(week_start + timedelta(days=7)).isoformat(),
             ))
@@ -411,13 +479,22 @@ async def get_story_points(squad: str | None = None, project: str | None = None,
         active_members = [m for m in members_points.values() if m.total_issues > 0]
         active_members.sort(key=lambda x: x.completed_points, reverse=True)
 
+        # Create current quarter info
+        current_quarter = SprintInfo(
+            id=0,
+            name=quarter_label,
+            state="active",
+            start_date=quarter_start.isoformat(),
+            end_date=quarter_end.isoformat(),
+        )
+
         result = StoryPointsResponse(
             total_completed=total_completed,
             total_in_progress=total_in_progress,
             total_committed=total_committed,
             velocity_trend=velocity_trend,
             by_member=active_members,
-            current_sprint=None,  # Not using sprints
+            current_sprint=current_quarter,
             avg_velocity=round(avg_velocity, 1),
         )
 

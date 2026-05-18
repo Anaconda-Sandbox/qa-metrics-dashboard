@@ -125,16 +125,19 @@ async def refresh_all_metrics():
 
 def start_scheduler():
     if not scheduler.running:
-        # Run initial refresh after 10 seconds (let services initialize)
+        # Run initial refresh after 30 seconds (let services initialize)
+        from apscheduler.triggers.date import DateTrigger
+        from datetime import timedelta
+
         scheduler.add_job(
             refresh_all_metrics,
-            trigger=IntervalTrigger(seconds=10),
+            trigger=DateTrigger(run_date=datetime.now() + timedelta(seconds=30)),
             id="initial_refresh",
             max_instances=1,
             replace_existing=True,
         )
 
-        # Schedule regular refresh every 30 minutes (increased from 10 to reduce API load)
+        # Schedule regular refresh every 30 minutes
         scheduler.add_job(
             refresh_all_metrics,
             trigger=IntervalTrigger(minutes=30),
@@ -144,7 +147,7 @@ def start_scheduler():
         )
 
         scheduler.start()
-        logger.info("Background scheduler started (refresh every 30 minutes)")
+        logger.info("Background scheduler started (initial in 30s, then every 30 minutes)")
 
 
 def stop_scheduler():

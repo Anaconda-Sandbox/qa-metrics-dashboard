@@ -30,7 +30,7 @@ async def defect_density(
 
 @router.get("/open-bugs", response_model=BugListResponse)
 async def open_bugs(
-    limit: int = Query(default=20, le=100),
+    limit: int = Query(default=1000, le=2000),
     squad: str | None = Query(default=None),
     project: str | None = Query(default=None),
 ):
@@ -81,7 +81,7 @@ async def automation_coverage(
 async def bugs_list(
     squad: str | None = Query(default=None),
     project: str | None = Query(default=None),
-    limit: int = Query(default=50, le=100),
+    limit: int = Query(default=1000, le=2000),
 ):
     try:
         return await jira_service.get_bugs_list(squad=squad, project=project, limit=limit)

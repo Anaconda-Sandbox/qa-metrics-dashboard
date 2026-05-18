@@ -64,10 +64,12 @@ async def _fetch_all_prs(squad: str | None, project: str | None) -> list[dict]:
     all_prs: list[dict] = []
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for repo in repos:
+        for i, repo in enumerate(repos):
             try:
                 prs = await _fetch_prs_for_repo(client, settings.github_org, repo)
                 all_prs.extend(prs)
+                if i < len(repos) - 1:
+                    await asyncio.sleep(1)  # Rate limit protection
             except httpx.HTTPError as e:
                 logger.error(f"GitHub API error fetching PRs for {repo}: {e}")
                 continue
