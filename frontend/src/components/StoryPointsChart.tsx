@@ -93,6 +93,33 @@ export default function StoryPointsChart({ squad }: { squad: string | null }) {
     );
   }
 
+  const hasData = data && (data.total_completed > 0 || data.total_in_progress > 0 || data.total_committed > 0);
+
+  if (!hasData) {
+    return (
+      <div className="rounded-2xl bg-[#0f1419] border border-[#1e2a3a]/60 p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-amber-500/10 rounded-lg">
+            <svg className="w-5 h-5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <h3 className="text-base font-semibold text-[#e2e8f0]">Story Points Not Available</h3>
+        </div>
+        <p className="text-sm text-[#64748b] leading-relaxed">
+          The selected projects don't have story points configured in Jira. Story point tracking requires
+          tickets to have the "Story Points" field populated during sprint planning.
+        </p>
+        <div className="mt-4 p-3 bg-[#1e293b]/50 rounded-lg border border-[#1e2a3a]/40">
+          <p className="text-xs text-[#94a3b8]">
+            <span className="font-medium text-[#e2e8f0]">Tip:</span> To enable story point tracking, ensure your team
+            estimates tickets using the Story Points field in Jira during sprint planning.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const velocityData = data?.velocity_trend?.map((v) => ({
     name: v.sprint_name.length > 15 ? v.sprint_name.slice(0, 15) + "..." : v.sprint_name,
     fullName: v.sprint_name,

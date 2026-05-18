@@ -1,11 +1,11 @@
 import base64
 import logging
 from collections import defaultdict
+from datetime import datetime, timedelta
 
 import httpx
 
-from app.config import get_settings
-from app.config import GITHUB_TO_JIRA_NAME, ALL_QA_MEMBERS
+from app.config import get_settings, GITHUB_TO_JIRA_NAME, ALL_QA_MEMBERS
 from app.models.metrics import (
     AutomationCoverageResponse,
     BugItem,
@@ -21,6 +21,9 @@ from app.models.metrics import (
 from app.services import cache_service
 
 logger = logging.getLogger(__name__)
+
+# Story Points custom field in Anaconda Jira
+STORY_POINTS_FIELD = "customfield_10126"
 
 
 def _auth_header() -> dict[str, str]:
@@ -301,7 +304,7 @@ async def get_automation_coverage(squad: str | None = None, project: str | None 
 
 
 async def get_story_points(squad: str | None = None, project: str | None = None, use_cache: bool = True) -> StoryPointsResponse:
-    """Get story points metrics including velocity trend and per-member breakdown"""
+    """Get story points metrics - completed, in progress, and weekly trends"""
     cache_key = f"story_points:{squad}"
 
     if use_cache:
@@ -310,202 +313,117 @@ async def get_story_points(squad: str | None = None, project: str | None = None,
             return StoryPointsResponse(**cached)
 
     try:
-        settings = get_settings()
         base = _projects_jql(squad, project)
+        fields = f"status,{STORY_POINTS_FIELD},assignee,resolutiondate,created"
 
-        # Get active and recent sprints
-        sprints = await _get_sprints(squad, project)
-        current_sprint = None
-        for s in sprints:
-            if s.state == "active":
-                current_sprint = s
-                break
+        # Get all issues with story points from last 90 days
+        jql_all = f'{base} AND "{STORY_POINTS_FIELD}" is not EMPTY AND updated >= -90d'
+        all_data = await _jql_search(jql_all, fields, max_results=500)
 
-        # Get velocity trend from last 6 sprints
-        velocity_trend = []
-        closed_sprints = [s for s in sprints if s.state == "closed"][-6:]
-
-        for sprint in closed_sprints:
-            sprint_velocity = await _get_sprint_velocity(sprint, squad, project)
-            velocity_trend.append(sprint_velocity)
-
-        # Get current sprint velocity if active
-        if current_sprint:
-            current_velocity = await _get_sprint_velocity(current_sprint, squad, project)
-            velocity_trend.append(current_velocity)
-
-        # Calculate totals from current/active sprint
+        # Calculate totals
         total_completed = 0.0
         total_in_progress = 0.0
         total_committed = 0.0
 
-        if velocity_trend:
-            latest = velocity_trend[-1]
-            total_completed = latest.completed_points
-            total_committed = latest.committed_points
-            total_in_progress = total_committed - total_completed
+        # Weekly velocity tracking (last 12 weeks)
+        weekly_completed: dict[str, float] = defaultdict(float)
+        weekly_committed: dict[str, float] = defaultdict(float)
 
-        # Calculate average velocity from closed sprints
-        completed_velocities = [v.completed_points for v in velocity_trend if v.completed_points > 0]
-        avg_velocity = sum(completed_velocities) / len(completed_velocities) if completed_velocities else 0
+        # Per-member tracking
+        members_points: dict[str, MemberStoryPoints] = {}
+        for github_name in ALL_QA_MEMBERS:
+            jira_name = GITHUB_TO_JIRA_NAME.get(github_name, github_name)
+            members_points[jira_name.lower()] = MemberStoryPoints(
+                username=github_name,
+                jira_name=jira_name,
+            )
 
-        # Get story points by team member
-        by_member = await _get_story_points_by_member(squad, project)
+        for issue in all_data.get("issues", []):
+            f = issue.get("fields", {})
+            points = float(f.get(STORY_POINTS_FIELD) or 0)
+            if points == 0:
+                continue
+
+            status_category = f.get("status", {}).get("statusCategory", {}).get("key", "")
+            created = f.get("created", "")
+            resolution_date = f.get("resolutiondate", "")
+
+            total_committed += points
+
+            # Get week for tracking
+            if resolution_date and status_category == "done":
+                try:
+                    dt = datetime.fromisoformat(resolution_date.replace("Z", "+00:00"))
+                    week_key = dt.strftime("%Y-W%W")
+                    weekly_completed[week_key] += points
+                except:
+                    pass
+                total_completed += points
+            elif status_category == "indeterminate":
+                total_in_progress += points
+
+            # Track by week created for committed
+            if created:
+                try:
+                    dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    week_key = dt.strftime("%Y-W%W")
+                    weekly_committed[week_key] += points
+                except:
+                    pass
+
+            # Per-member breakdown
+            assignee = f.get("assignee", {})
+            if assignee:
+                assignee_name = assignee.get("displayName", "").lower()
+                if assignee_name in members_points:
+                    member = members_points[assignee_name]
+                    member.total_issues += 1
+                    if status_category == "done":
+                        member.completed_points += points
+                        member.issues_completed += 1
+                    elif status_category == "indeterminate":
+                        member.in_progress_points += points
+
+        # Build velocity trend (last 8 weeks)
+        velocity_trend = []
+        now = datetime.now()
+        for i in range(7, -1, -1):
+            week_start = now - timedelta(weeks=i)
+            week_key = week_start.strftime("%Y-W%W")
+            velocity_trend.append(SprintVelocity(
+                sprint_name=week_key,
+                sprint_id=i,
+                committed_points=weekly_committed.get(week_key, 0),
+                completed_points=weekly_completed.get(week_key, 0),
+                completion_rate=round(
+                    (weekly_completed.get(week_key, 0) / weekly_committed.get(week_key, 1)) * 100
+                    if weekly_committed.get(week_key, 0) > 0 else 0, 1
+                ),
+                start_date=week_start.isoformat(),
+                end_date=(week_start + timedelta(days=7)).isoformat(),
+            ))
+
+        # Calculate average velocity (completed points per week)
+        completed_weeks = [v.completed_points for v in velocity_trend if v.completed_points > 0]
+        avg_velocity = sum(completed_weeks) / len(completed_weeks) if completed_weeks else 0
+
+        # Filter active members and sort
+        active_members = [m for m in members_points.values() if m.total_issues > 0]
+        active_members.sort(key=lambda x: x.completed_points, reverse=True)
 
         result = StoryPointsResponse(
             total_completed=total_completed,
             total_in_progress=total_in_progress,
             total_committed=total_committed,
             velocity_trend=velocity_trend,
-            by_member=by_member,
-            current_sprint=current_sprint,
+            by_member=active_members,
+            current_sprint=None,  # Not using sprints
             avg_velocity=round(avg_velocity, 1),
         )
 
-        cache_service.cache_set(cache_key, result.model_dump(), ttl=1800)  # 30 min cache
+        cache_service.cache_set(cache_key, result.model_dump(), ttl=1800)
         return result
 
     except httpx.HTTPError as e:
         logger.error(f"Jira API error in get_story_points: {e}")
         raise
-
-
-async def _get_sprints(squad: str | None = None, project: str | None = None) -> list[SprintInfo]:
-    """Get sprints from Jira boards"""
-    settings = get_settings()
-    sprints = []
-
-    # Get board IDs for the projects
-    projects = settings.jira_projects_for_filter(squad, project)
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        # Get boards for projects
-        boards_url = f"{settings.jira_base_url}/rest/agile/1.0/board"
-        params = {"projectKeyOrId": projects[0]} if projects else {}
-
-        try:
-            resp = await client.get(boards_url, headers=_auth_header(), params=params)
-            resp.raise_for_status()
-            boards_data = resp.json()
-
-            for board in boards_data.get("values", [])[:3]:  # Limit to first 3 boards
-                board_id = board.get("id")
-                if not board_id:
-                    continue
-
-                # Get sprints for this board
-                sprints_url = f"{settings.jira_base_url}/rest/agile/1.0/board/{board_id}/sprint"
-                sprint_resp = await client.get(sprints_url, headers=_auth_header(), params={"state": "active,closed"})
-
-                if sprint_resp.status_code == 200:
-                    sprint_data = sprint_resp.json()
-                    for s in sprint_data.get("values", []):
-                        sprints.append(SprintInfo(
-                            id=s.get("id"),
-                            name=s.get("name", ""),
-                            state=s.get("state", ""),
-                            start_date=s.get("startDate"),
-                            end_date=s.get("endDate"),
-                        ))
-        except Exception as e:
-            logger.warning(f"Could not fetch sprints: {e}")
-
-    # Remove duplicates and sort by id
-    seen = set()
-    unique_sprints = []
-    for s in sorted(sprints, key=lambda x: x.id, reverse=True):
-        if s.id not in seen:
-            seen.add(s.id)
-            unique_sprints.append(s)
-
-    return unique_sprints[:10]  # Return last 10 sprints
-
-
-async def _get_sprint_velocity(sprint: SprintInfo, squad: str | None = None, project: str | None = None) -> SprintVelocity:
-    """Get velocity for a specific sprint"""
-    base = _projects_jql(squad, project)
-
-    # Story points field - common custom field names
-    story_points_field = "customfield_10016"  # Adjust based on your Jira instance
-
-    # Get all issues in sprint
-    jql = f'{base} AND sprint = {sprint.id}'
-    fields = f"status,{story_points_field},assignee"
-
-    data = await _jql_search(jql, fields, max_results=200)
-
-    committed_points = 0.0
-    completed_points = 0.0
-
-    for issue in data.get("issues", []):
-        f = issue.get("fields", {})
-        points = f.get(story_points_field) or 0
-        committed_points += float(points)
-
-        status_category = f.get("status", {}).get("statusCategory", {}).get("key", "")
-        if status_category == "done":
-            completed_points += float(points)
-
-    completion_rate = (completed_points / committed_points * 100) if committed_points > 0 else 0
-
-    return SprintVelocity(
-        sprint_name=sprint.name,
-        sprint_id=sprint.id,
-        committed_points=committed_points,
-        completed_points=completed_points,
-        completion_rate=round(completion_rate, 1),
-        start_date=sprint.start_date,
-        end_date=sprint.end_date,
-    )
-
-
-async def _get_story_points_by_member(squad: str | None = None, project: str | None = None) -> list[MemberStoryPoints]:
-    """Get story points breakdown by QA team member"""
-    base = _projects_jql(squad, project)
-    story_points_field = "customfield_10016"
-
-    members_points: dict[str, MemberStoryPoints] = {}
-
-    # Initialize for all QA members
-    for github_name in ALL_QA_MEMBERS:
-        jira_name = GITHUB_TO_JIRA_NAME.get(github_name, github_name)
-        members_points[jira_name.lower()] = MemberStoryPoints(
-            username=github_name,
-            jira_name=jira_name,
-        )
-
-    # Get issues assigned to QA members in last 30 days
-    jql = f'{base} AND assignee is not EMPTY AND updated >= -30d'
-    fields = f"status,{story_points_field},assignee"
-
-    data = await _jql_search(jql, fields, max_results=500)
-
-    for issue in data.get("issues", []):
-        f = issue.get("fields", {})
-        assignee = f.get("assignee", {})
-        if not assignee:
-            continue
-
-        assignee_name = assignee.get("displayName", "")
-        assignee_key = assignee_name.lower()
-
-        if assignee_key not in members_points:
-            continue
-
-        points = float(f.get(story_points_field) or 0)
-        status_category = f.get("status", {}).get("statusCategory", {}).get("key", "")
-
-        member = members_points[assignee_key]
-        member.total_issues += 1
-
-        if status_category == "done":
-            member.completed_points += points
-            member.issues_completed += 1
-        elif status_category == "indeterminate":  # In Progress
-            member.in_progress_points += points
-
-    # Filter out members with no activity and sort by completed points
-    active_members = [m for m in members_points.values() if m.total_issues > 0]
-    active_members.sort(key=lambda x: x.completed_points, reverse=True)
-
-    return active_members
