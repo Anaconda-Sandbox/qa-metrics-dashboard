@@ -8,6 +8,7 @@ import BugTable from "./BugTable";
 import FlakyTestsTable from "./FlakyTestsTable";
 import TeamContributions from "./TeamContributions";
 import TeamReviewStats from "./TeamReviewStats";
+import StoryPointsChart from "./StoryPointsChart";
 import {
   useDefectDensity,
   useAutomationCoverage,
@@ -85,6 +86,19 @@ export default function UnifiedDashboard({ squad }: Props) {
           loading={flakyLoading}
         />
       </div>
+
+      {/* Story Points / Velocity Section */}
+      <DashboardSection
+        title="Story Points & Velocity"
+        icon={
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+          </svg>
+        }
+        badge="Sprint Metrics"
+      >
+        <StoryPointsChart squad={squad} />
+      </DashboardSection>
 
       {/* Quality Metrics Section */}
       <DashboardSection

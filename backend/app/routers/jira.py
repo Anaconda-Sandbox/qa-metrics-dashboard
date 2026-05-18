@@ -8,6 +8,7 @@ from app.models.metrics import (
     BugPriorityBreakdown,
     BugStatusBreakdown,
     DefectDensityResponse,
+    StoryPointsResponse,
 )
 from app.services import jira_service
 
@@ -73,4 +74,30 @@ async def automation_coverage(
         return await jira_service.get_automation_coverage(squad=squad, project=project)
     except Exception as e:
         logger.error(f"Error fetching automation coverage: {e}")
+        return {"error": str(e), "data": None}
+
+
+@router.get("/bugs", response_model=BugListResponse)
+async def bugs_list(
+    squad: str | None = Query(default=None),
+    project: str | None = Query(default=None),
+    limit: int = Query(default=50, le=100),
+):
+    try:
+        return await jira_service.get_bugs_list(squad=squad, project=project, limit=limit)
+    except Exception as e:
+        logger.error(f"Error fetching bugs list: {e}")
+        return {"error": str(e), "data": None}
+
+
+@router.get("/story-points", response_model=StoryPointsResponse)
+async def story_points(
+    squad: str | None = Query(default=None),
+    project: str | None = Query(default=None),
+):
+    """Get story points metrics including velocity trend and per-member breakdown"""
+    try:
+        return await jira_service.get_story_points(squad=squad, project=project)
+    except Exception as e:
+        logger.error(f"Error fetching story points: {e}")
         return {"error": str(e), "data": None}

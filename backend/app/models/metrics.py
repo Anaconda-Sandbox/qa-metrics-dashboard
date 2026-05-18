@@ -218,3 +218,41 @@ class MetricsSummary(BaseModel):
     reportportal: dict | None = None
     github: dict | None = None
     errors: dict[str, str] = {}
+
+
+# Story Points Models
+class SprintInfo(BaseModel):
+    id: int
+    name: str
+    state: str  # active, closed, future
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+class SprintVelocity(BaseModel):
+    sprint_name: str
+    sprint_id: int
+    committed_points: float = 0
+    completed_points: float = 0
+    completion_rate: float = 0
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+class MemberStoryPoints(BaseModel):
+    username: str
+    jira_name: str
+    completed_points: float = 0
+    in_progress_points: float = 0
+    total_issues: int = 0
+    issues_completed: int = 0
+
+
+class StoryPointsResponse(BaseModel):
+    total_completed: float = 0
+    total_in_progress: float = 0
+    total_committed: float = 0
+    velocity_trend: list[SprintVelocity] = []
+    by_member: list[MemberStoryPoints] = []
+    current_sprint: SprintInfo | None = None
+    avg_velocity: float = 0
