@@ -1,0 +1,76 @@
+import logging
+
+from fastapi import APIRouter, Query
+
+from app.models.metrics import (
+    AutomationCoverageResponse,
+    BugListResponse,
+    BugPriorityBreakdown,
+    BugStatusBreakdown,
+    DefectDensityResponse,
+)
+from app.services import jira_service
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/jira", tags=["jira"])
+
+
+@router.get("/defect-density", response_model=DefectDensityResponse)
+async def defect_density(
+    squad: str | None = Query(default=None),
+    project: str | None = Query(default=None),
+):
+    try:
+        return await jira_service.get_defect_density(squad=squad, project=project)
+    except Exception as e:
+        logger.error(f"Error fetching defect density: {e}")
+        return {"error": str(e), "data": None}
+
+
+@router.get("/open-bugs", response_model=BugListResponse)
+async def open_bugs(
+    limit: int = Query(default=20, le=100),
+    squad: str | None = Query(default=None),
+    project: str | None = Query(default=None),
+):
+    try:
+        return await jira_service.get_open_bugs(limit=limit, squad=squad, project=project)
+    except Exception as e:
+        logger.error(f"Error fetching open bugs: {e}")
+        return {"error": str(e), "data": None}
+
+
+@router.get("/bug-priority-breakdown", response_model=BugPriorityBreakdown)
+async def bug_priority_breakdown(
+    squad: str | None = Query(default=None),
+    project: str | None = Query(default=None),
+):
+    try:
+        return await jira_service.get_bug_priority_breakdown(squad=squad, project=project)
+    except Exception as e:
+        logger.error(f"Error fetching bug priority breakdown: {e}")
+        return {"error": str(e), "data": None}
+
+
+@router.get("/bug-status-breakdown", response_model=BugStatusBreakdown)
+async def bug_status_breakdown(
+    squad: str | None = Query(default=None),
+    project: str | None = Query(default=None),
+):
+    try:
+        return await jira_service.get_bug_status_breakdown(squad=squad, project=project)
+    except Exception as e:
+        logger.error(f"Error fetching bug status breakdown: {e}")
+        return {"error": str(e), "data": None}
+
+
+@router.get("/automation-coverage", response_model=AutomationCoverageResponse)
+async def automation_coverage(
+    squad: str | None = Query(default=None),
+    project: str | None = Query(default=None),
+):
+    try:
+        return await jira_service.get_automation_coverage(squad=squad, project=project)
+    except Exception as e:
+        logger.error(f"Error fetching automation coverage: {e}")
+        return {"error": str(e), "data": None}
