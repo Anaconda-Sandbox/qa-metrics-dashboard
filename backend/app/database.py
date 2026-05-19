@@ -88,6 +88,80 @@ class StoryPointHistory(Base):
     )
 
 
+class DXSnapshot(Base):
+    """Stores DX survey snapshot metadata."""
+    __tablename__ = "dx_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    dx_snapshot_id = Column(String(50), nullable=False, unique=True, index=True)
+    quarter = Column(String(10), nullable=False, index=True)
+    scheduled_for = Column(Date, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    completed_count = Column(Integer, default=0)
+    total_count = Column(Integer, default=0)
+    response_rate = Column(Float, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DXMetrics(Base):
+    """Stores DX metrics per quarter."""
+    __tablename__ = "dx_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    quarter = Column(String(10), nullable=False, index=True)
+    snapshot_id = Column(String(50), nullable=True, index=True)
+
+    # KPIs
+    dex_score = Column(Float, nullable=True)
+    quality_score = Column(Float, nullable=True)
+    ease_of_delivery = Column(Float, nullable=True)
+    weekly_time_loss = Column(Float, nullable=True)
+
+    # Factors
+    deep_work = Column(Float, nullable=True)
+    build_and_test = Column(Float, nullable=True)
+    code_maintainability = Column(Float, nullable=True)
+    documentation = Column(Float, nullable=True)
+    planning_process = Column(Float, nullable=True)
+    cross_team_collaboration = Column(Float, nullable=True)
+    incremental_delivery = Column(Float, nullable=True)
+    ease_of_release = Column(Float, nullable=True)
+    incident_handling = Column(Float, nullable=True)
+    ai_code_quality = Column(Float, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('quarter', name='uq_dx_metrics_quarter'),
+    )
+
+
+class DXTeamScore(Base):
+    """Stores individual DX team scores for detailed breakdown."""
+    __tablename__ = "dx_team_scores"
+
+    id = Column(Integer, primary_key=True, index=True)
+    quarter = Column(String(10), nullable=False, index=True)
+    snapshot_id = Column(String(50), nullable=True, index=True)
+    team_name = Column(String(100), nullable=False, index=True)
+    team_id = Column(String(50), nullable=True)
+    item_name = Column(String(100), nullable=True)
+    item_type = Column(String(20), nullable=True)  # 'kpi' or 'factor'
+    score = Column(Float, nullable=True)
+    response_count = Column(Integer, default=0)
+    vs_prev = Column(Float, nullable=True)
+    vs_org = Column(Float, nullable=True)
+    vs_50th = Column(Float, nullable=True)
+    vs_75th = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_dx_team_scores_lookup', 'quarter', 'team_name', 'item_name'),
+    )
+
+
 def init_db():
     """Create all tables."""
     Base.metadata.create_all(bind=engine)

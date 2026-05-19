@@ -525,3 +525,190 @@ async def get_org_benchmarks(snapshot_id: str) -> dict:
             }
 
     return benchmarks
+
+
+# ============ DATABASE FUNCTIONS ============
+
+def save_dx_metrics_to_db(db, quarter: str, snapshot: DXSnapshot | None, metrics: DXMetrics, scores: list[DXTeamScore]):
+    """Save DX metrics to database for historical tracking."""
+    from app.database import DXSnapshot as DBSnapshot, DXMetrics as DBMetrics, DXTeamScore as DBTeamScore
+
+    # Save snapshot metadata
+    if snapshot:
+        existing_snapshot = db.query(DBSnapshot).filter(DBSnapshot.dx_snapshot_id == snapshot.id).first()
+        if not existing_snapshot:
+            db_snapshot = DBSnapshot(
+                dx_snapshot_id=snapshot.id,
+                quarter=quarter,
+                scheduled_for=datetime.strptime(snapshot.scheduled_for, "%Y-%m-%d").date(),
+                completed_at=datetime.fromisoformat(snapshot.completed_at.replace("Z", "+00:00")) if snapshot.completed_at else None,
+                completed_count=snapshot.completed_count,
+                total_count=snapshot.total_count,
+                response_rate=snapshot.response_rate
+            )
+            db.add(db_snapshot)
+
+    # Save or update metrics
+    existing_metrics = db.query(DBMetrics).filter(DBMetrics.quarter == quarter).first()
+    if existing_metrics:
+        existing_metrics.snapshot_id = snapshot.id if snapshot else None
+        existing_metrics.dex_score = metrics.dex_score
+        existing_metrics.quality_score = metrics.quality_score
+        existing_metrics.ease_of_delivery = metrics.ease_of_delivery
+        existing_metrics.deep_work = metrics.deep_work
+        existing_metrics.build_and_test = metrics.build_and_test
+        existing_metrics.code_maintainability = metrics.code_maintainability
+        existing_metrics.documentation = metrics.documentation
+        existing_metrics.planning_process = metrics.planning_process
+        existing_metrics.cross_team_collaboration = metrics.cross_team_collaboration
+        existing_metrics.incremental_delivery = metrics.incremental_delivery
+        existing_metrics.ease_of_release = metrics.ease_of_release
+        existing_metrics.weekly_time_loss = metrics.weekly_time_loss
+        existing_metrics.ai_code_quality = metrics.ai_code_quality
+        existing_metrics.updated_at = datetime.utcnow()
+    else:
+        db_metrics = DBMetrics(
+            quarter=quarter,
+            snapshot_id=snapshot.id if snapshot else None,
+            dex_score=metrics.dex_score,
+            quality_score=metrics.quality_score,
+            ease_of_delivery=metrics.ease_of_delivery,
+            deep_work=metrics.deep_work,
+            build_and_test=metrics.build_and_test,
+            code_maintainability=metrics.code_maintainability,
+            documentation=metrics.documentation,
+            planning_process=metrics.planning_process,
+            cross_team_collaboration=metrics.cross_team_collaboration,
+            incremental_delivery=metrics.incremental_delivery,
+            ease_of_release=metrics.ease_of_release,
+            weekly_time_loss=metrics.weekly_time_loss,
+            ai_code_quality=metrics.ai_code_quality
+        )
+        db.add(db_metrics)
+
+    # Save QA team scores (delete old ones first for this quarter)
+    db.query(DBTeamScore).filter(
+        DBTeamScore.quarter == quarter,
+        DBTeamScore.team_name == "QA"
+    ).delete()
+
+    qa_scores = [s for s in scores if s.team_name == "QA"]
+    for score in qa_scores:
+        db_score = DBTeamScore(
+            quarter=quarter,
+            snapshot_id=snapshot.id if snapshot else None,
+            team_name=score.team_name,
+            team_id=score.team_id,
+            item_name=score.item_name,
+            item_type=score.item_type,
+            score=score.score,
+            response_count=score.response_count,
+            vs_prev=score.vs_prev,
+            vs_org=score.vs_org,
+            vs_50th=score.vs_50th,
+            vs_75th=score.vs_75th
+        )
+        db.add(db_score)
+
+    db.commit()
+    logger.info(f"Saved DX metrics for {quarter} to database")
+
+
+def get_dx_metrics_from_db(db, quarter: str) -> dict | None:
+    """Get DX metrics from database if available."""
+    from app.database import DXSnapshot as DBSnapshot, DXMetrics as DBMetrics, DXTeamScore as DBTeamScore
+
+    db_metrics = db.query(DBMetrics).filter(DBMetrics.quarter == quarter).first()
+    if not db_metrics:
+        return None
+
+    # Get snapshot
+    snapshot = None
+    if db_metrics.snapshot_id:
+        db_snapshot = db.query(DBSnapshot).filter(DBSnapshot.dx_snapshot_id == db_metrics.snapshot_id).first()
+        if db_snapshot:
+            snapshot = {
+                "id": db_snapshot.dx_snapshot_id,
+                "scheduled_for": db_snapshot.scheduled_for.isoformat(),
+                "completed_at": db_snapshot.completed_at.isoformat() if db_snapshot.completed_at else None,
+                "completed_count": db_snapshot.completed_count,
+                "total_count": db_snapshot.total_count,
+                "response_rate": db_snapshot.response_rate
+            }
+
+    # Get QA team scores
+    db_scores = db.query(DBTeamScore).filter(
+        DBTeamScore.quarter == quarter,
+        DBTeamScore.team_name == "QA"
+    ).all()
+
+    qa_scores = [
+        {
+            "team_name": s.team_name,
+            "team_id": s.team_id,
+            "item_name": s.item_name,
+            "item_type": s.item_type,
+            "score": s.score,
+            "response_count": s.response_count,
+            "vs_prev": s.vs_prev,
+            "vs_org": s.vs_org,
+            "vs_50th": s.vs_50th,
+            "vs_75th": s.vs_75th
+        }
+        for s in db_scores
+    ]
+
+    return {
+        "quarter": quarter,
+        "snapshot": snapshot,
+        "metrics": {
+            "dex_score": db_metrics.dex_score,
+            "quality_score": db_metrics.quality_score,
+            "ease_of_delivery": db_metrics.ease_of_delivery,
+            "deep_work": db_metrics.deep_work,
+            "build_and_test": db_metrics.build_and_test,
+            "code_maintainability": db_metrics.code_maintainability,
+            "documentation": db_metrics.documentation,
+            "planning_process": db_metrics.planning_process,
+            "cross_team_collaboration": db_metrics.cross_team_collaboration,
+            "incremental_delivery": db_metrics.incremental_delivery,
+            "ease_of_release": db_metrics.ease_of_release,
+            "weekly_time_loss": db_metrics.weekly_time_loss,
+            "ai_code_quality": db_metrics.ai_code_quality
+        },
+        "qa_scores": qa_scores,
+        "from_cache": True,
+        "last_updated": db_metrics.updated_at.isoformat() if db_metrics.updated_at else None
+    }
+
+
+async def sync_dx_data_for_quarter(db, quarter: str, force: bool = False) -> dict:
+    """
+    Sync DX data from API to database.
+    Returns cached data if available and not forcing refresh.
+    """
+    # Check if we have recent data (less than 1 hour old)
+    if not force:
+        cached = get_dx_metrics_from_db(db, quarter)
+        if cached and cached.get("last_updated"):
+            last_updated = datetime.fromisoformat(cached["last_updated"])
+            if datetime.utcnow() - last_updated < timedelta(hours=1):
+                logger.info(f"Using cached DX data for {quarter}")
+                return cached
+
+    # Fetch fresh data from DX API
+    logger.info(f"Fetching fresh DX data for {quarter} from API")
+    data = await get_quarterly_dx_data(quarter)
+
+    # Save to database
+    save_dx_metrics_to_db(db, quarter, data.snapshot, data.metrics, data.team_scores)
+
+    # Return the data
+    return {
+        "quarter": quarter,
+        "snapshot": data.snapshot.model_dump() if data.snapshot else None,
+        "metrics": data.metrics.model_dump(),
+        "qa_scores": [s.model_dump() for s in data.team_scores if s.team_name == "QA"],
+        "from_cache": False,
+        "last_updated": datetime.utcnow().isoformat()
+    }

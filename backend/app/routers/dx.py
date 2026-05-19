@@ -1,8 +1,10 @@
 """
 DX API Router - Endpoints for Developer Experience metrics
 """
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
+from sqlalchemy.orm import Session
 from app.services import dx_service
+from app.database import get_db
 
 router = APIRouter(prefix="/api/dx", tags=["dx"])
 
@@ -52,37 +54,23 @@ async def list_teams():
 
 @router.get("/metrics")
 async def get_quarterly_metrics(
-    quarter: str = Query(..., description="Quarter in format YYYY-QN, e.g., 2026-Q2")
+    quarter: str = Query(..., description="Quarter in format YYYY-QN, e.g., 2026-Q2"),
+    refresh: bool = Query(False, description="Force refresh from DX API"),
+    db: Session = Depends(get_db)
 ):
-    """Get DX metrics for a specific quarter."""
-    data = await dx_service.get_quarterly_dx_data(quarter)
-    return {
-        "quarter": quarter,
-        "snapshot": data.snapshot.model_dump() if data.snapshot else None,
-        "metrics": data.metrics.model_dump(),
-        "pr_metrics": data.pr_metrics.model_dump() if data.pr_metrics else None,
-        "team_scores_count": len(data.team_scores)
-    }
+    """Get DX metrics for a specific quarter (uses DB cache)."""
+    data = await dx_service.sync_dx_data_for_quarter(db, quarter, force=refresh)
+    return data
 
 
 @router.get("/metrics/all")
 async def get_all_metrics(
-    quarter: str = Query(..., description="Quarter in format YYYY-QN")
+    quarter: str = Query(..., description="Quarter in format YYYY-QN"),
+    db: Session = Depends(get_db)
 ):
     """Get comprehensive DX metrics including team scores."""
-    data = await dx_service.get_quarterly_dx_data(quarter)
-
-    # Filter for QA team scores
-    qa_scores = [s.model_dump() for s in data.team_scores if s.team_name == "QA"]
-
-    return {
-        "quarter": quarter,
-        "snapshot": data.snapshot.model_dump() if data.snapshot else None,
-        "metrics": data.metrics.model_dump(),
-        "pr_metrics": data.pr_metrics.model_dump() if data.pr_metrics else None,
-        "qa_scores": qa_scores,
-        "all_teams_scores": [s.model_dump() for s in data.team_scores]
-    }
+    data = await dx_service.sync_dx_data_for_quarter(db, quarter)
+    return data
 
 
 @router.get("/dora")
@@ -97,9 +85,15 @@ async def get_dora_metrics(
 @router.get("/compare")
 async def compare_quarters(
     quarter1: str = Query(..., description="First quarter (current)"),
-    quarter2: str = Query(..., description="Second quarter (previous)")
+    quarter2: str = Query(..., description="Second quarter (previous)"),
+    db: Session = Depends(get_db)
 ):
-    """Compare DX metrics between two quarters."""
+    """Compare DX metrics between two quarters (uses DB cache)."""
+    # Sync both quarters to DB first
+    await dx_service.sync_dx_data_for_quarter(db, quarter1)
+    await dx_service.sync_dx_data_for_quarter(db, quarter2)
+
+    # Then compare
     comparison = await dx_service.compare_quarters(quarter1, quarter2)
     return comparison
 
@@ -146,38 +140,58 @@ async def get_snapshot_scores(snapshot_id: str):
 @router.get("/dashboard")
 async def get_dashboard_data(
     quarter: str = Query(..., description="Quarter in format YYYY-QN"),
-    compare_quarter: str = Query(None, description="Optional quarter to compare against")
+    compare_quarter: str = Query(None, description="Optional quarter to compare against"),
+    refresh: bool = Query(False, description="Force refresh from DX API"),
+    db: Session = Depends(get_db)
 ):
-    """Get complete dashboard data for DX metrics page."""
-    # Get current quarter data
-    current_data = await dx_service.get_quarterly_dx_data(quarter)
+    """Get complete dashboard data for DX metrics page (uses DB cache)."""
+    # Get current quarter data from DB (with sync if needed)
+    cached_data = await dx_service.sync_dx_data_for_quarter(db, quarter, force=refresh)
 
-    # Get DORA metrics
+    # Get DORA metrics (always from API for now)
     dora = await dx_service.get_dora_metrics_for_quarter(quarter)
 
-    # Get team info
+    # Get team info (always from API)
     team = await dx_service.get_team_info()
 
     # Get benchmarks if snapshot exists
     benchmarks = None
-    if current_data.snapshot:
-        benchmarks = await dx_service.get_org_benchmarks(current_data.snapshot.id)
+    if cached_data.get("snapshot"):
+        benchmarks = await dx_service.get_org_benchmarks(cached_data["snapshot"]["id"])
 
     response = {
         "quarter": quarter,
-        "snapshot": current_data.snapshot.model_dump() if current_data.snapshot else None,
-        "metrics": current_data.metrics.model_dump(),
+        "snapshot": cached_data.get("snapshot"),
+        "metrics": cached_data.get("metrics"),
         "dora": dora.model_dump(),
-        "pr_metrics": current_data.pr_metrics.model_dump() if current_data.pr_metrics else None,
+        "pr_metrics": None,  # Can be added later from DB
         "team": team.model_dump() if team else None,
         "benchmarks": benchmarks,
-        "qa_scores": [s.model_dump() for s in current_data.team_scores if s.team_name == "QA"],
-        "comparison": None
+        "qa_scores": cached_data.get("qa_scores", []),
+        "comparison": None,
+        "from_cache": cached_data.get("from_cache", False),
+        "last_updated": cached_data.get("last_updated")
     }
 
     # Add comparison if requested
     if compare_quarter:
+        await dx_service.sync_dx_data_for_quarter(db, compare_quarter)
         comparison = await dx_service.compare_quarters(quarter, compare_quarter)
         response["comparison"] = comparison
 
     return response
+
+
+@router.post("/sync")
+async def sync_dx_data(
+    quarter: str = Query(..., description="Quarter to sync"),
+    db: Session = Depends(get_db)
+):
+    """Force sync DX data from API to database."""
+    result = await dx_service.sync_dx_data_for_quarter(db, quarter, force=True)
+    return {
+        "status": "synced",
+        "quarter": quarter,
+        "from_cache": result.get("from_cache", False),
+        "last_updated": result.get("last_updated")
+    }
