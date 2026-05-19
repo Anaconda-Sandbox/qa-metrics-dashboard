@@ -34,14 +34,14 @@ class DXSnapshot(BaseModel):
 class DXTeamScore(BaseModel):
     team_name: str
     team_id: str
-    item_name: str
-    item_type: str  # 'kpi' or 'factor'
-    score: float | None
-    response_count: int
-    vs_prev: float | None
-    vs_org: float | None
-    vs_50th: float | None
-    vs_75th: float | None
+    item_name: Optional[str] = None
+    item_type: Optional[str] = None  # 'kpi' or 'factor'
+    score: Optional[float] = None
+    response_count: int = 0
+    vs_prev: Optional[float] = None
+    vs_org: Optional[float] = None
+    vs_50th: Optional[float] = None
+    vs_75th: Optional[float] = None
 
 
 class DXMetrics(BaseModel):
