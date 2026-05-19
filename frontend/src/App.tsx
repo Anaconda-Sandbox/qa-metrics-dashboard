@@ -4,9 +4,10 @@ import ProjectSelector from "./components/ProjectSelector";
 import QuarterSelector, { getCurrentQuarter, getQuarterOptions } from "./components/QuarterSelector";
 import IndividualView from "./components/IndividualView";
 import ProfessionalDashboard from "./components/ProfessionalDashboard";
+import DXDashboard from "./components/DXDashboard";
 
 export default function App() {
-  const [view, setView] = useState<"dashboard" | "individual">("dashboard");
+  const [view, setView] = useState<"dashboard" | "individual" | "dx">("dashboard");
   const [project, setProject] = useState("ALL");
   const [quarter, setQuarter] = useState(getCurrentQuarter());
   const [compareQuarter, setCompareQuarter] = useState<string | null>(null);
@@ -54,9 +55,11 @@ export default function App() {
 
               <div className="h-8 w-px bg-[var(--border-subtle)] hidden md:block" />
 
-              {/* Filters */}
+              {/* Filters - hide project selector on DX view */}
               <div className="flex items-center gap-3">
-                <ProjectSelector project={project} onProjectChange={setProject} />
+                {view !== "dx" && (
+                  <ProjectSelector project={project} onProjectChange={setProject} />
+                )}
 
                 <div className="flex items-center gap-2">
                   <QuarterSelector quarter={quarter} onQuarterChange={setQuarter} />
@@ -130,6 +133,11 @@ export default function App() {
               setCompareQuarter(null);
             }}
           />
+        ) : view === "dx" ? (
+          <DXDashboard
+            quarter={quarter}
+            compareQuarter={isComparing ? compareQuarter : null}
+          />
         ) : (
           <IndividualView />
         )}
@@ -154,6 +162,10 @@ export default function App() {
               <span className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning-base)]" />
                 ReportPortal
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-primary)]" />
+                DX
               </span>
             </div>
           </div>

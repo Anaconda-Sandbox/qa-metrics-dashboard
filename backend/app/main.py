@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import SQUAD_CONFIG, PROJECT_CONFIG, ALL_JIRA_PROJECTS, ALL_QA_MEMBERS, get_settings
 from app.models.metrics import DashboardConfigResponse, SquadInfo, ProjectInfo
-from app.routers import github, jira, members, reportportal
+from app.routers import github, jira, members, reportportal, dx
 from app.services import github_service, jira_service, reportportal_service, cache_service
 from app.services.scheduler_service import start_scheduler, stop_scheduler, get_scheduler_status
 from app.database import init_db, get_db
@@ -55,6 +55,7 @@ app.include_router(jira.router)
 app.include_router(reportportal.router)
 app.include_router(github.router)
 app.include_router(members.router)
+app.include_router(dx.router)
 
 
 @app.get("/health")
