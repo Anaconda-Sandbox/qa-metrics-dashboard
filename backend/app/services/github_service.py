@@ -354,8 +354,7 @@ async def get_team_review_stats(squad: str | None = None, project: str | None = 
         start_date, end_date, cutoff_str = _get_quarter_dates(quarter)
 
         repos = settings.repos_for_filter(squad, project)
-        members = settings.members_for_filter(squad, project)
-        repos_set = set(repos)
+        members_set = set(m.lower() for m in ALL_QA_MEMBERS)
 
         reviewer_data: dict[str, dict] = defaultdict(lambda: {
             "reviews_given": 0, "approvals": 0, "changes_requested": 0, "comments": 0, "prs_reviewed": set()
@@ -363,165 +362,85 @@ async def get_team_review_stats(squad: str | None = None, project: str | None = 
         weekly_reviews: dict[str, int] = defaultdict(int)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            # IMPORTANT: Query AI bots FIRST before rate limit is exhausted
-            ai_bots = ["copilot-pull-request-reviewer[bot]", "claude[bot]"]
-            for bot in ai_bots:
+            # Fetch PRs from project repos and get their reviews directly (avoids search API rate limits)
+            for repo in repos:
                 try:
-                    search_query = f"is:pr reviewed-by:{bot} org:{settings.github_org} updated:>={cutoff_str}"
-                    search_url = "https://api.github.com/search/issues"
-                    params = {"q": search_query, "per_page": 100}
+                    # Fetch recent PRs from repo
+                    page = 1
+                    while page <= 3:  # Limit to 3 pages per repo
+                        url = f"https://api.github.com/repos/{settings.github_org}/{repo}/pulls"
+                        params = {"state": "all", "per_page": 100, "page": page, "sort": "updated", "direction": "desc"}
+                        resp = await client.get(url, headers=_headers(), params=params)
+                        if resp.status_code != 200:
+                            break
+                        prs = resp.json()
+                        if not prs:
+                            break
 
-                    resp = await client.get(search_url, headers=_headers(), params=params)
-                    if resp.status_code == 403:
-                        logger.warning(f"Rate limited on bot search for {bot}")
-                        await asyncio.sleep(2)
-                        continue
-                    if resp.status_code != 200:
-                        logger.warning(f"Bot search failed for {bot}: {resp.status_code}")
-                        continue
-                    data = resp.json()
-                    logger.info(f"Found {data.get('total_count', 0)} PRs reviewed by {bot}")
+                        for pr in prs:
+                            pr_number = pr.get("number", 0)
+                            pr_updated = pr.get("updated_at", "")
+                            if pr_updated:
+                                updated_dt = datetime.fromisoformat(pr_updated.replace("Z", "+00:00"))
+                                if updated_dt < start_date:
+                                    continue  # Skip PRs updated before quarter start
 
-                    for pr in data.get("items", []):
-                        pr_number = pr.get("number", 0)
-                        repo_url = pr.get("repository_url", "")
-                        repo_name = repo_url.split("/")[-1] if repo_url else "unknown"
-
-                        # Filter by squad repos
-                        if repo_name not in repos_set:
-                            continue
-
-                        pr_key = f"{repo_name}:{pr_number}"
-
-                        if pr_key in reviewer_data[bot]["prs_reviewed"]:
-                            continue
-
-                        # Fetch actual review state for bot
-                        try:
-                            reviews_url = f"https://api.github.com/repos/{settings.github_org}/{repo_name}/pulls/{pr_number}/reviews"
-                            reviews_resp = await client.get(reviews_url, headers=_headers())
-                            if reviews_resp.status_code == 200:
+                            # Fetch reviews for this PR
+                            reviews_url = f"https://api.github.com/repos/{settings.github_org}/{repo}/pulls/{pr_number}/reviews"
+                            try:
+                                reviews_resp = await client.get(reviews_url, headers=_headers())
+                                if reviews_resp.status_code != 200:
+                                    continue
                                 reviews = reviews_resp.json()
-                                bot_state = None
-                                bot_submitted = None
+
                                 for review in reviews:
                                     reviewer = review.get("user", {}).get("login", "")
-                                    if reviewer.lower() == bot.lower():
-                                        bot_state = review.get("state", "COMMENTED")
-                                        bot_submitted = review.get("submitted_at")
-                                        break
+                                    reviewer_lower = reviewer.lower()
+                                    submitted_at = review.get("submitted_at", "")
+                                    state = review.get("state", "COMMENTED")
 
-                                if bot_state and bot_submitted:
-                                    submitted_dt = datetime.fromisoformat(bot_submitted.replace("Z", "+00:00"))
-                                    # Filter by date range
+                                    if not submitted_at:
+                                        continue
+
+                                    submitted_dt = datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
                                     if submitted_dt < start_date or submitted_dt > end_date:
                                         continue
 
-                                    reviewer_data[bot]["prs_reviewed"].add(pr_key)
-                                    reviewer_data[bot]["reviews_given"] += 1
-                                    if bot_state == "APPROVED":
-                                        reviewer_data[bot]["approvals"] += 1
-                                    elif bot_state == "CHANGES_REQUESTED":
-                                        reviewer_data[bot]["changes_requested"] += 1
+                                    # Include QA members and bots
+                                    is_qa = reviewer_lower in members_set
+                                    is_bot = "copilot" in reviewer_lower or "claude" in reviewer_lower or "[bot]" in reviewer_lower
+                                    if not is_qa and not is_bot:
+                                        continue
+
+                                    pr_key = f"{repo}:{pr_number}:{reviewer}"
+                                    if pr_key in reviewer_data[reviewer]["prs_reviewed"]:
+                                        continue
+
+                                    reviewer_data[reviewer]["prs_reviewed"].add(pr_key)
+                                    reviewer_data[reviewer]["reviews_given"] += 1
+                                    if state == "APPROVED":
+                                        reviewer_data[reviewer]["approvals"] += 1
+                                    elif state == "CHANGES_REQUESTED":
+                                        reviewer_data[reviewer]["changes_requested"] += 1
                                     else:
-                                        reviewer_data[bot]["comments"] += 1
+                                        reviewer_data[reviewer]["comments"] += 1
 
                                     week = submitted_dt.strftime("%G-W%V")
                                     weekly_reviews[week] += 1
-                        except httpx.HTTPError:
-                            pass
 
-                    await asyncio.sleep(2.5)
-
-                except httpx.HTTPError as e:
-                    logger.error(f"Error fetching bot reviews for {bot}: {e}")
-                    continue
-
-            # Now query human QA members (filtered by squad)
-            for member in members:
-                try:
-                    search_query = f"is:pr reviewed-by:{member} org:{settings.github_org} updated:>={cutoff_str}"
-                    search_url = "https://api.github.com/search/issues"
-                    params = {"q": search_query, "per_page": 100, "sort": "updated", "order": "desc"}
-
-                    resp = await client.get(search_url, headers=_headers(), params=params)
-                    if resp.status_code == 403:
-                        logger.warning(f"Rate limited on search for {member}, waiting...")
-                        await asyncio.sleep(60)
-                        resp = await client.get(search_url, headers=_headers(), params=params)
-                    if resp.status_code != 200:
-                        continue
-                    data = resp.json()
-
-                    for pr in data.get("items", []):
-                        pr_author = pr.get("user", {}).get("login", "")
-                        if pr_author.lower() == member.lower():
-                            continue
-
-                        pr_number = pr.get("number", 0)
-                        repo_url = pr.get("repository_url", "")
-                        repo_name = repo_url.split("/")[-1] if repo_url else "unknown"
-
-                        # Filter by squad repos
-                        if repo_name not in repos_set:
-                            continue
-
-                        pr_key = f"{repo_name}:{pr_number}"
-
-                        if pr_key in reviewer_data[member]["prs_reviewed"]:
-                            continue
-
-                        reviews_url = f"https://api.github.com/repos/{settings.github_org}/{repo_name}/pulls/{pr_number}/reviews"
-                        try:
-                            reviews_resp = await client.get(reviews_url, headers=_headers())
-                            if reviews_resp.status_code != 200:
+                            except httpx.HTTPError:
                                 continue
-                            reviews = reviews_resp.json()
 
-                            best_state = None
-                            best_submitted = None
-                            state_priority = {"APPROVED": 3, "CHANGES_REQUESTED": 2, "COMMENTED": 1}
-
-                            for review in reviews:
-                                reviewer = review.get("user", {}).get("login", "")
-                                if reviewer.lower() != member.lower():
-                                    continue
-                                submitted_at = review.get("submitted_at", "")
-                                if not submitted_at:
-                                    continue
-                                submitted_dt = datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
-                                # Filter by date range
-                                if submitted_dt < start_date or submitted_dt > end_date:
-                                    continue
-
-                                state = review.get("state", "COMMENTED")
-                                if not best_state or state_priority.get(state, 0) > state_priority.get(best_state, 0):
-                                    best_state = state
-                                    best_submitted = submitted_at
-
-                            if best_state:
-                                reviewer_data[member]["prs_reviewed"].add(pr_key)
-                                reviewer_data[member]["reviews_given"] += 1
-                                if best_state == "APPROVED":
-                                    reviewer_data[member]["approvals"] += 1
-                                elif best_state == "CHANGES_REQUESTED":
-                                    reviewer_data[member]["changes_requested"] += 1
-                                else:
-                                    reviewer_data[member]["comments"] += 1
-
-                                if best_submitted:
-                                    submitted_dt = datetime.fromisoformat(best_submitted.replace("Z", "+00:00"))
-                                    week = submitted_dt.strftime("%G-W%V")
-                                    weekly_reviews[week] += 1
-
-                        except httpx.HTTPError:
-                            continue
-
-                    await asyncio.sleep(2.5)
+                        if len(prs) < 100:
+                            break
+                        page += 1
+                        await asyncio.sleep(0.5)
 
                 except httpx.HTTPError as e:
-                    logger.error(f"GitHub API error fetching reviews for {member}: {e}")
+                    logger.error(f"GitHub API error fetching PRs for {repo}: {e}")
                     continue
+
+                await asyncio.sleep(0.5)
 
         reviewers = []
         total_reviews = 0

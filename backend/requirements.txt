@@ -6,3 +6,6 @@ cachetools==5.3.3
 python-dotenv==1.0.1
 redis==5.0.4
 apscheduler==3.10.4
+sqlalchemy==2.0.30
+psycopg2-binary==2.9.9
+alembic==1.13.1

@@ -64,13 +64,22 @@ export default function App() {
                   {/* Compare Toggle */}
                   <button
                     onClick={handleCompareToggle}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
                       isComparing
-                        ? "bg-[var(--accent-primary)] text-white shadow-lg shadow-[var(--accent-primary)]/25"
+                        ? "bg-[var(--accent-primary)] text-white shadow-lg shadow-[var(--accent-primary)]/25 hover:bg-[var(--accent-primary)]/80"
                         : "bg-[var(--bg-surface)] text-[var(--text-tertiary)] border border-[var(--border-subtle)] hover:border-[var(--accent-primary)]/50 hover:text-[var(--text-secondary)]"
                     }`}
                   >
-                    {isComparing ? "Comparing" : "Compare"}
+                    {isComparing ? (
+                      <>
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        Exit Compare
+                      </>
+                    ) : (
+                      "Compare"
+                    )}
                   </button>
 
                   {/* Compare Quarter Selector */}
@@ -116,6 +125,10 @@ export default function App() {
             project={proj}
             quarter={quarter}
             compareQuarter={isComparing ? compareQuarter : null}
+            onExitCompare={() => {
+              setIsComparing(false);
+              setCompareQuarter(null);
+            }}
           />
         ) : (
           <IndividualView />

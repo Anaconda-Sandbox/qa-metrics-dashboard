@@ -123,10 +123,20 @@ async def refresh_all_metrics():
         _refresh_in_progress = False
 
 
+async def take_daily_db_snapshot():
+    """Take a daily snapshot of metrics to the database."""
+    from app.services.snapshot_service import take_daily_snapshot
+    now = datetime.now()
+    quarter = f"{now.year}-Q{(now.month - 1) // 3 + 1}"
+    logger.info(f"Taking daily database snapshot for {quarter}")
+    await take_daily_snapshot(quarter)
+
+
 def start_scheduler():
     if not scheduler.running:
         # Run initial refresh after 30 seconds (let services initialize)
         from apscheduler.triggers.date import DateTrigger
+        from apscheduler.triggers.cron import CronTrigger
         from datetime import timedelta
 
         scheduler.add_job(
@@ -146,8 +156,17 @@ def start_scheduler():
             replace_existing=True,
         )
 
+        # Schedule daily database snapshot at 6 AM
+        scheduler.add_job(
+            take_daily_db_snapshot,
+            trigger=CronTrigger(hour=6, minute=0),
+            id="daily_snapshot",
+            max_instances=1,
+            replace_existing=True,
+        )
+
         scheduler.start()
-        logger.info("Background scheduler started (initial in 30s, then every 30 minutes)")
+        logger.info("Background scheduler started (refresh every 30 min, DB snapshot daily at 6 AM)")
 
 
 def stop_scheduler():

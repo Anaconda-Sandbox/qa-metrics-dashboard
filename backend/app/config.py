@@ -159,7 +159,7 @@ PROJECT_CONFIG = {
         "repos": ["notebooks-testing", "ai-navigator", "anaconda-desktop", "anaconda-connector"],
     },
     "TBP": {
-        "name": "Toolbox Pro",
+        "name": "Notebook",
         "repos": ["anaconda-mcp"],
     },
     "CASH": {
@@ -175,7 +175,7 @@ PROJECT_CONFIG = {
         "repos": ["ui", "ai-platform-ui"],
     },
     "SHP": {
-        "name": "Shop",
+        "name": "Self-Hosted Platform",
         "repos": ["ui"],
     },
     "HUB": {
