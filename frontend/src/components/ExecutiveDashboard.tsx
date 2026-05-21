@@ -73,6 +73,12 @@ const tooltipStyle = {
   labelStyle: { color: "#F1F5F9", fontWeight: 600, marginBottom: "8px" },
 };
 
+function scrollToSection(id: string) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function KPICard({
   title,
   value,
@@ -82,6 +88,7 @@ function KPICard({
   trendInverted = false,
   color = "primary",
   loading = false,
+  scrollTo,
 }: {
   title: string;
   value: number | string;
@@ -91,6 +98,7 @@ function KPICard({
   trendInverted?: boolean;
   color?: "primary" | "success" | "warning" | "error" | "info";
   loading?: boolean;
+  scrollTo?: string;
 }) {
   const colorMap = {
     primary: { bg: "var(--accent-primary)", subtle: "rgba(99, 102, 241, 0.1)" },
@@ -113,13 +121,34 @@ function KPICard({
   }
 
   const isPositive = trendInverted ? (trend ?? 0) < 0 : (trend ?? 0) > 0;
+  const interactive = !!scrollTo;
+  const handleActivate = () => {
+    if (scrollTo) scrollToSection(scrollTo);
+  };
 
-  return (
-    <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-5 transition-all duration-200 hover:border-[var(--border-emphasis)] hover:shadow-lg">
+  const baseClass = "rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-5 transition-all duration-200 text-left w-full";
+  const interactiveClass = interactive
+    ? "cursor-pointer hover:border-[var(--accent-primary)]/60 hover:-translate-y-0.5 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]/40"
+    : "hover:border-[var(--border-emphasis)] hover:shadow-lg";
+
+  const inner = (
+    <>
       <div className="flex items-start justify-between mb-3">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
           {title}
         </span>
+        {interactive && (
+          <svg
+            className="w-3.5 h-3.5 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 transition-opacity"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+            aria-hidden="true"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+          </svg>
+        )}
       </div>
       <div className="flex items-baseline gap-2">
         <span className="text-3xl font-bold tracking-tight" style={{ color: colors.bg }}>
@@ -135,7 +164,18 @@ function KPICard({
         )}
       </div>
       {description && <p className="mt-2 text-xs text-[var(--text-muted)]">{description}</p>}
-    </div>
+    </>
+  );
+
+  if (interactive) {
+    return (
+      <button type="button" onClick={handleActivate} className={`group ${baseClass} ${interactiveClass}`} aria-label={`${title}, jump to detail`}>
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <div className={`${baseClass} ${interactiveClass}`}>{inner}</div>
   );
 }
 
@@ -240,7 +280,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
     if (!data?.velocity_trend) return [];
     return data.velocity_trend.map((d) => ({
       week: d.week.slice(5),
-      Points: d.completed_points,
+      Points: Math.round(d.completed_points),
       Tickets: d.tickets_completed,
     }));
   }, [data]);
@@ -334,6 +374,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
           <KPICard
             title="QA-Reported Bugs"
+            scrollTo="quality-metrics"
             value={bugsData?.total ?? data.open_bugs}
             description={`${bugsData?.critical ?? data.critical_bugs} high priority`}
             trend={
@@ -349,6 +390,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           />
           <KPICard
             title="Resolution Rate"
+            scrollTo="quality-metrics"
             value={data.bug_resolution_rate ?? 0}
             suffix="%"
             description="Bugs resolved"
@@ -356,16 +398,8 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
             color={(data.bug_resolution_rate ?? 0) >= 80 ? "success" : (data.bug_resolution_rate ?? 0) >= 60 ? "warning" : "error"}
           />
           <KPICard
-            title="Cycle Time"
-            value={data.avg_cycle_time_hours ? Math.round(data.avg_cycle_time_hours) : 0}
-            suffix="h"
-            description="Avg resolution"
-            trend={isComparing ? calculateTrend(data.avg_cycle_time_hours ?? 0, compareData?.avg_cycle_time_hours ?? undefined) : undefined}
-            trendInverted={true}
-            color="info"
-          />
-          <KPICard
             title="Total PRs"
+            scrollTo="quality-metrics"
             value={data.prs_opened}
             description={periodLabel}
             trend={isComparing ? calculateTrend(data.prs_opened, compareData?.prs_opened) : undefined}
@@ -373,6 +407,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           />
           <KPICard
             title="Total Merges"
+            scrollTo="quality-metrics"
             value={data.prs_merged}
             description={periodLabel}
             trend={isComparing ? calculateTrend(data.prs_merged, compareData?.prs_merged) : undefined}
@@ -380,6 +415,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           />
           <KPICard
             title="Avg Merge Time"
+            scrollTo="quality-metrics"
             value={data.avg_pr_merge_time_hours ? Math.round(data.avg_pr_merge_time_hours) : 0}
             suffix="h"
             description="Open to merge"
@@ -404,13 +440,15 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           />
           <KPICard
             title="Story Points"
-            value={data.story_points_completed}
-            description={`${data.story_points_in_progress} in progress`}
+            scrollTo="velocity"
+            value={Math.round(data.story_points_completed)}
+            description={`${Math.round(data.story_points_in_progress)} in progress`}
             trend={isComparing ? calculateTrend(data.story_points_completed, compareData?.story_points_completed) : undefined}
             color="primary"
           />
           <KPICard
             title="Reviews"
+            scrollTo="review-activity"
             value={data.total_reviews}
             description={periodLabel}
             trend={isComparing ? calculateTrend(data.total_reviews, compareData?.total_reviews) : undefined}
@@ -418,6 +456,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           />
           <KPICard
             title="Tickets Done"
+            scrollTo="velocity"
             value={data.tickets_completed}
             description={periodLabel}
             trend={isComparing ? calculateTrend(data.tickets_completed, compareData?.tickets_completed) : undefined}
@@ -427,18 +466,18 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
       </section>
 
       {/* Velocity Section */}
-      <section>
+      <section id="velocity" style={{ scrollMarginTop: "80px" }}>
         <SectionHeader title="Velocity & Delivery" badge="Quarterly" />
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           <div className="lg:col-span-1 space-y-4">
             <Card className="text-center">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">Completed</p>
-              <p className="text-4xl font-bold text-[var(--success-base)]">{data.story_points_completed}</p>
+              <p className="text-4xl font-bold text-[var(--success-base)]">{Math.round(data.story_points_completed)}</p>
               <p className="text-xs text-[var(--text-muted)] mt-1">story points</p>
             </Card>
             <Card className="text-center">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">In Progress</p>
-              <p className="text-4xl font-bold text-[var(--warning-base)]">{data.story_points_in_progress}</p>
+              <p className="text-4xl font-bold text-[var(--warning-base)]">{Math.round(data.story_points_in_progress)}</p>
               <p className="text-xs text-[var(--text-muted)] mt-1">story points</p>
             </Card>
           </div>
@@ -470,7 +509,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
       </section>
 
       {/* Quality & Defects */}
-      <section>
+      <section id="quality-metrics" style={{ scrollMarginTop: "80px" }}>
         <SectionHeader title="Quality Metrics" />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
@@ -540,7 +579,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
       </section>
 
       {/* Review Activity Trend (aggregate weekly) */}
-      <section>
+      <section id="review-activity" style={{ scrollMarginTop: "80px" }}>
         <SectionHeader title="Review Activity" badge="Quarterly" />
         <Card>
           <div className="mb-4">
@@ -595,7 +634,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
               <p className="text-xs uppercase tracking-wider text-[var(--text-muted)] mb-1">Points Delta</p>
               <div className="flex items-center gap-2">
                 <span className="text-2xl font-bold text-[var(--text-primary)]">
-                  {(data.story_points_completed - compareData.story_points_completed).toFixed(1)}
+                  {Math.round(data.story_points_completed - compareData.story_points_completed)}
                 </span>
               </div>
             </div>

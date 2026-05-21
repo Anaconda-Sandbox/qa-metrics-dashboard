@@ -125,6 +125,53 @@ def _quarter_bounds(quarter: str | None) -> tuple[str, str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), label
 
 
+async def get_qa_bug_metrics(quarter: str | None = None, project: str | None = None) -> dict:
+    """Canonical bug metrics for the QA team, per the source-of-truth JQL.
+
+    Bugs are scoped to the given quarter by `created` date. QA membership is
+    creator OR reporter in membersOf("QA"). Resolution = `resolutiondate` is
+    set (DX equivalent: completed_at IS NOT NULL). Critical = open bug with
+    priority in (Highest, High).
+
+    Returns: {total, resolved, open, critical_open, resolution_rate}.
+    """
+    start, end, _label = _quarter_bounds(quarter)
+    project_clause = ""
+    if project and project != "ALL":
+        safe = project.replace('"', "").replace("'", "")
+        project_clause = f' AND project = "{safe}"'
+
+    base = (
+        f'issuetype = Bug AND (reporter in membersOf("QA") OR creator in membersOf("QA")) '
+        f'AND created >= "{start}" AND created < "{end}"{project_clause}'
+    )
+
+    total_jql = base
+    resolved_jql = f"{base} AND resolutiondate is not EMPTY"
+    critical_jql = f"{base} AND resolutiondate is EMPTY AND priority in (Highest, High)"
+
+    fields = "id"
+    total_data, resolved_data, critical_data = (
+        await _jql_search(total_jql, fields, max_results=2000),
+        await _jql_search(resolved_jql, fields, max_results=2000),
+        await _jql_search(critical_jql, fields, max_results=2000),
+    )
+
+    total = len(total_data.get("issues", []))
+    resolved = len(resolved_data.get("issues", []))
+    critical_open = len(critical_data.get("issues", []))
+    open_count = total - resolved
+    rate = round((resolved / total) * 100, 2) if total else 0.0
+
+    return {
+        "total": total,
+        "resolved": resolved,
+        "open": open_count,
+        "critical_open": critical_open,
+        "resolution_rate": rate,
+    }
+
+
 async def get_qa_reported_bugs(
     quarter: str | None = None,
     project: str | None = None,

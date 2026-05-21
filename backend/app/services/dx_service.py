@@ -1487,63 +1487,62 @@ def _repo_clause(project: str | None, repo_id_expr: str, join_alias: str = "rep"
     return join, where
 
 
-async def _get_executive_bug_metrics(start_date: str, end_date: str, project: str | None = None) -> dict:
-    """Get bug metrics for executive dashboard using exact user query pattern."""
-    proj_join, proj_where = _project_clause(project, alias="ji", join_alias="qbp")
-    # Use exact same team hierarchy pattern that returns 132 bugs
-    sql = f"""
-    WITH qa_team_ids AS (
-      SELECT dxth.descendant_id as team_id FROM dx_teams dt
-      JOIN dx_team_hierarchies dxth ON dxth.ancestor_id = dt.id
-      WHERE dt.source_id = '{QA_TEAM_ID}'
-      UNION
-      SELECT dt2.id as team_id FROM dx_teams dt2 WHERE dt2.source_id = '{QA_TEAM_ID}'
-    ),
-    qa_jira_users AS (
-      SELECT ju.id
-      FROM jira_users ju
-      JOIN dx_users du ON LOWER(du.email) = LOWER(ju.email)
-      WHERE du.team_id IN (SELECT team_id FROM qa_team_ids)
-        AND du.deleted_at IS NULL
-    ),
-    qa_bugs AS (
-      SELECT ji.id, js.status_category, jp.name as priority_name
-      FROM jira_issues ji
-      JOIN jira_issue_types jit ON jit.id = ji.issue_type_id
-      JOIN jira_statuses js ON js.id = ji.status_id
-      LEFT JOIN jira_priorities jp ON jp.id = ji.priority_id{proj_join}
-      WHERE jit.name ILIKE '%bug%'
-        AND ji.deleted_at IS NULL
-        AND ji.created_at >= '{start_date}'
-        AND ji.created_at < '{end_date}'
-        AND (
-          ji.user_id IN (SELECT id FROM qa_jira_users)
-          OR ji.reporter_id IN (SELECT id FROM qa_jira_users)
-          OR ji.creator_id IN (SELECT id FROM qa_jira_users)
-        ){proj_where}
-    )
-    SELECT
-      COUNT(CASE WHEN status_category != 'Done' THEN 1 END) AS open_bugs,
-      COUNT(CASE WHEN status_category != 'Done' AND priority_name IN ('Highest', 'High') THEN 1 END) AS critical_bugs,
-      COUNT(*) AS total_bugs,
-      COUNT(CASE WHEN status_category = 'Done' THEN 1 END) AS resolved_bugs
-    FROM qa_bugs
+async def _get_executive_bug_metrics(start_date: str, end_date: str, project: str | None = None, quarter: str | None = None) -> dict:
+    """Get bug metrics for the leadership dashboard.
+
+    Source of truth is Jira (not DX Cloud). Reads from MetricSnapshot first
+    (refreshed hourly by the scheduler) so the read path is sub-millisecond;
+    falls back to a live Jira API call if no recent snapshot exists.
+
+    Why not DX Cloud SQL: ~4 of Anaconda's Jira projects (CLI, PREX, QA,
+    MRKT) aren't allowlisted in DX, so a DX-sourced bug count silently
+    misses ~38% of QA-reported bugs.
+
+    Resolution signal: `resolutiondate is not EMPTY` in JQL, which corresponds
+    to `completed_at IS NOT NULL` in DX — they're equivalent in the source data.
+    Critical = open bug with priority in (Highest, High).
     """
+    from app.database import SessionLocal
+    from app.services import snapshot_service
 
-    results = await _run_sql_query(sql)
+    # We need the quarter label to look up snapshots. If the caller didn't
+    # pass it, derive from the dates.
+    if not quarter:
+        try:
+            year, month = int(start_date[:4]), int(start_date[5:7])
+            quarter = f"{year}-Q{(month - 1) // 3 + 1}"
+        except (ValueError, IndexError):
+            quarter = None
 
-    result = {"open_bugs": 0, "critical_bugs": 0}
+    project_key = project if (project and project != "ALL") else None
 
-    if results:
-        r = results[0]
-        result["open_bugs"] = int(r.get("open_bugs", 0) or 0)
-        result["critical_bugs"] = int(r.get("critical_bugs", 0) or 0)
-        total = int(r.get("total_bugs", 0) or 0)
-        resolved = int(r.get("resolved_bugs", 0) or 0)
-        if total > 0:
-            result["resolution_rate"] = round((resolved / total) * 100, 1)
+    # Read path: MetricSnapshot
+    if quarter:
+        db = SessionLocal()
+        try:
+            snap = snapshot_service.get_latest_bug_metrics(db, project_key, quarter)
+        finally:
+            db.close()
+        if snap:
+            return {
+                "open_bugs": snap["open_bugs"],
+                "critical_bugs": snap["critical_bugs"],
+                "resolution_rate": snap["resolution_rate"],
+            }
 
-    return result
+    # Fallback: live Jira call (will populate the snapshot on the next scheduler tick)
+    logger.info(f"Bug metrics snapshot missing for project={project_key} quarter={quarter}; falling back to live Jira call")
+    try:
+        from app.services import jira_service
+        m = await jira_service.get_qa_bug_metrics(quarter=quarter, project=project_key)
+        return {
+            "open_bugs": m["open"],
+            "critical_bugs": m["critical_open"],
+            "resolution_rate": m["resolution_rate"],
+        }
+    except Exception as e:
+        logger.error(f"Live Jira fallback for bug metrics failed: {e}")
+        return {"open_bugs": 0, "critical_bugs": 0, "resolution_rate": 0}
 
 
 async def _get_executive_velocity_metrics(start_date: str, end_date: str, project: str | None = None) -> dict:
@@ -1837,6 +1836,9 @@ async def _get_executive_top_reviewers(start_date: str, end_date: str, project: 
     repo_join = ""
     if repo_join_inner:
         repo_join = " JOIN pull_requests rev_pr ON prr.pull_request_id = rev_pr.id" + repo_join_inner
+    # DX's pull_request_reviews.review_type values are APPROVAL / CHANGES_REQUESTED /
+    # COMMENT / UNKNOWN — count each as a separate metric so the Top Reviewers
+    # table can show the breakdown instead of all-zero columns.
     sql = f"""
     WITH qa_users AS (
       SELECT du.id AS dx_user_id, du.name, du.email
@@ -1848,7 +1850,9 @@ async def _get_executive_top_reviewers(start_date: str, end_date: str, project: 
     reviews AS (
       SELECT prr.dx_user_id,
         COUNT(DISTINCT prr.pull_request_id) AS reviews_done,
-        SUM(prr.comment_count) AS total_comments
+        SUM(prr.comment_count) AS total_comments,
+        COUNT(*) FILTER (WHERE prr.review_type = 'APPROVAL') AS approvals,
+        COUNT(*) FILTER (WHERE prr.review_type = 'CHANGES_REQUESTED') AS changes_requested
       FROM pull_request_reviews prr{repo_join}
       WHERE prr.created >= '{start_date}' AND prr.created < '{end_date}'
         AND prr.dx_user_id IN (SELECT dx_user_id FROM qa_users)
@@ -1858,7 +1862,9 @@ async def _get_executive_top_reviewers(start_date: str, end_date: str, project: 
     SELECT
       qu.name AS user_name,
       COALESCE(r.reviews_done, 0) AS reviews_given,
-      COALESCE(r.total_comments, 0) AS comments
+      COALESCE(r.total_comments, 0) AS comments,
+      COALESCE(r.approvals, 0) AS approvals,
+      COALESCE(r.changes_requested, 0) AS changes_requested
     FROM qa_users qu
     LEFT JOIN reviews r ON qu.dx_user_id = r.dx_user_id
     WHERE COALESCE(r.reviews_done, 0) > 0
@@ -1870,8 +1876,8 @@ async def _get_executive_top_reviewers(start_date: str, end_date: str, project: 
         {
             "user_name": r.get("user_name", "Unknown"),
             "reviews_given": int(r.get("reviews_given", 0) or 0),
-            "approvals": 0,
-            "changes_requested": 0,
+            "approvals": int(r.get("approvals", 0) or 0),
+            "changes_requested": int(r.get("changes_requested", 0) or 0),
             "comments": int(r.get("comments", 0) or 0)
         }
         for r in results
@@ -1889,7 +1895,7 @@ async def get_executive_dashboard_metrics(quarter: str, project: str | None = No
     start_date, end_date = _get_quarter_date_range(quarter)
 
     results = await asyncio.gather(
-        _get_executive_bug_metrics(start_date, end_date, project),
+        _get_executive_bug_metrics(start_date, end_date, project, quarter=quarter),
         _get_executive_velocity_metrics(start_date, end_date, project),
         _get_executive_pr_metrics(start_date, end_date, project),
         _get_executive_defect_trend(start_date, end_date, project),

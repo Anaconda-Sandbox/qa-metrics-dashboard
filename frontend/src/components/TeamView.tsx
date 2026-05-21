@@ -150,8 +150,8 @@ export default function TeamView({ quarter, project }: Props) {
                   {data.story_points_by_member.map((m) => (
                     <tr key={m.user_name} className="border-b border-[var(--border-subtle)]/40 hover:bg-[var(--bg-surface)]/50 transition-colors">
                       <td className="py-3 px-4 font-medium text-[var(--text-primary)]">{m.user_name}</td>
-                      <td className="text-center py-3 px-4 text-[var(--success-base)] font-semibold">{m.completed_points}</td>
-                      <td className="text-center py-3 px-4 text-[var(--warning-base)]">{m.in_progress_points}</td>
+                      <td className="text-center py-3 px-4 text-[var(--success-base)] font-semibold">{Math.round(m.completed_points)}</td>
+                      <td className="text-center py-3 px-4 text-[var(--warning-base)]">{Math.round(m.in_progress_points)}</td>
                       <td className="text-center py-3 px-4 text-[var(--text-tertiary)]">{m.total_issues}</td>
                       <td className="text-center py-3 px-4 text-[var(--info-base)]">{m.issues_completed}</td>
                     </tr>

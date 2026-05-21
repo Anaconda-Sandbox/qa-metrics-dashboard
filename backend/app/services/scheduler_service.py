@@ -132,6 +132,20 @@ async def take_daily_db_snapshot():
     await take_daily_snapshot(quarter)
 
 
+async def refresh_bug_metrics_snapshot():
+    """Hourly: refresh QA bug metrics in MetricSnapshot for the current quarter, every project.
+
+    The leadership dashboard reads bug counts and resolution rate from
+    MetricSnapshot. Keeping this fresh (~hourly) means the dashboard read
+    path is a Postgres lookup, not a Jira API call per request.
+    """
+    from app.services.snapshot_service import snapshot_qa_bug_metrics_for_quarter
+    now = datetime.now()
+    quarter = f"{now.year}-Q{(now.month - 1) // 3 + 1}"
+    logger.info(f"Refreshing bug-metrics snapshot for {quarter}")
+    await snapshot_qa_bug_metrics_for_quarter(quarter)
+
+
 def start_scheduler():
     if not scheduler.running:
         # Run initial refresh after 30 seconds (let services initialize)
@@ -165,8 +179,25 @@ def start_scheduler():
             replace_existing=True,
         )
 
+        # Bug-metrics snapshot: warm the cache 60s after startup, then every hour.
+        # The leadership dashboard reads from MetricSnapshot (no per-request Jira call).
+        scheduler.add_job(
+            refresh_bug_metrics_snapshot,
+            trigger=DateTrigger(run_date=datetime.now() + timedelta(seconds=60)),
+            id="initial_bug_metrics_snapshot",
+            max_instances=1,
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            refresh_bug_metrics_snapshot,
+            trigger=IntervalTrigger(hours=1),
+            id="hourly_bug_metrics_snapshot",
+            max_instances=1,
+            replace_existing=True,
+        )
+
         scheduler.start()
-        logger.info("Background scheduler started (refresh every 30 min, DB snapshot daily at 6 AM)")
+        logger.info("Background scheduler started (refresh every 30 min, bug-metrics snapshot hourly, daily DB snapshot at 6 AM)")
 
 
 def stop_scheduler():

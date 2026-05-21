@@ -10,6 +10,82 @@ from app.services import jira_service, github_service
 logger = logging.getLogger(__name__)
 
 
+# Bug-metrics snapshot keys. Stored per (project, quarter) in MetricSnapshot.
+# Read by dx_service._get_executive_bug_metrics for the leadership dashboard.
+BUG_METRIC_TYPES = ("total_bugs", "resolved_bugs", "open_bugs_canonical", "critical_bugs_canonical", "resolution_rate")
+
+
+async def snapshot_qa_bug_metrics_for_quarter(quarter: str) -> None:
+    """Refresh QA-team bug metrics for one quarter, every project + ALL.
+
+    Uses Jira API directly (canonical query: creator OR reporter in QA,
+    completed_at via resolutiondate, priority in (Highest, High) for critical).
+    Hits all 17+ projects so the leadership dashboard can read instantly from
+    MetricSnapshot regardless of which project is selected.
+    """
+    db = SessionLocal()
+    try:
+        today = date.today()
+        projects: list[str | None] = [None] + list(PROJECT_CONFIG.keys())  # None = ALL
+
+        for project in projects:
+            label = project or "ALL"
+            try:
+                metrics = await jira_service.get_qa_bug_metrics(quarter=quarter, project=project)
+                _upsert_metric(db, today, project, quarter, "total_bugs", metrics["total"])
+                _upsert_metric(db, today, project, quarter, "resolved_bugs", metrics["resolved"])
+                _upsert_metric(db, today, project, quarter, "open_bugs_canonical", metrics["open"])
+                _upsert_metric(db, today, project, quarter, "critical_bugs_canonical", metrics["critical_open"])
+                _upsert_metric(db, today, project, quarter, "resolution_rate", metrics["resolution_rate"])
+                db.commit()
+                logger.info(f"Bug snapshot {quarter}/{label}: total={metrics['total']} resolved={metrics['resolved']} rate={metrics['resolution_rate']}%")
+            except Exception as e:
+                logger.error(f"Bug snapshot failed for {quarter}/{label}: {e}")
+                db.rollback()
+    finally:
+        db.close()
+
+
+def get_latest_bug_metrics(db: Session, project: str | None, quarter: str) -> dict | None:
+    """Return the latest snapshot of bug metrics for (project, quarter), or None.
+
+    Caller should treat None as 'snapshot missing — fall back to a live query'.
+    """
+    rows = db.query(MetricSnapshot).filter(
+        MetricSnapshot.project == project,
+        MetricSnapshot.quarter == quarter,
+        MetricSnapshot.metric_type.in_(BUG_METRIC_TYPES),
+    ).order_by(MetricSnapshot.snapshot_date.desc(), MetricSnapshot.created_at.desc()).all()
+
+    if not rows:
+        return None
+
+    # Take the most recent value for each metric_type
+    out: dict[str, float] = {}
+    seen: set[str] = set()
+    for r in rows:
+        if r.metric_type in seen:
+            continue
+        seen.add(r.metric_type)
+        out[r.metric_type] = r.value
+        if len(seen) == len(BUG_METRIC_TYPES):
+            break
+
+    # Need at least total + resolution_rate to be useful
+    if "total_bugs" not in out or "resolution_rate" not in out:
+        return None
+
+    latest_date = rows[0].snapshot_date
+    return {
+        "total_bugs": int(out.get("total_bugs", 0)),
+        "resolved_bugs": int(out.get("resolved_bugs", 0)),
+        "open_bugs": int(out.get("open_bugs_canonical", 0)),
+        "critical_bugs": int(out.get("critical_bugs_canonical", 0)),
+        "resolution_rate": float(out.get("resolution_rate", 0)),
+        "snapshot_date": latest_date.isoformat() if latest_date else None,
+    }
+
+
 async def take_daily_snapshot(quarter: str):
     """Take a daily snapshot of all metrics for all projects."""
     db = SessionLocal()
