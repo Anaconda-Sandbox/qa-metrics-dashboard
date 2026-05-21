@@ -8,12 +8,24 @@ from app.models.metrics import (
     BugPriorityBreakdown,
     BugStatusBreakdown,
     DefectDensityResponse,
+    QAReportedBugsResponse,
     StoryPointsResponse,
 )
 from app.services import jira_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jira", tags=["jira"])
+
+
+@router.get("/qa-reported-bugs", response_model=QAReportedBugsResponse)
+async def qa_reported_bugs(
+    quarter: str | None = Query(default=None, description="Quarter in format YYYY-QN, e.g., 2026-Q2. Defaults to current quarter."),
+):
+    """Bugs reported by the QA team in the given quarter, with a critical-priority sub-count.
+
+    Source: Jira (`reporter in membersOf(\"QA\")`), critical = priority in (Highest, High).
+    """
+    return await jira_service.get_qa_reported_bugs(quarter=quarter)
 
 
 @router.get("/defect-density", response_model=DefectDensityResponse)

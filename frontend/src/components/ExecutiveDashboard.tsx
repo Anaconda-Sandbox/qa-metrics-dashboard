@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo } from "react";
 import {
   AreaChart,
   Area,
-  BarChart,
   Bar,
   XAxis,
   YAxis,
@@ -12,7 +11,6 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
-  Cell,
 } from "recharts";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
@@ -49,6 +47,12 @@ interface ExecutiveMetrics {
     changes_requested: number;
     comments: number;
   }>;
+}
+
+interface QAReportedBugs {
+  quarter: string;
+  total: number;
+  critical: number;
 }
 
 interface Props {
@@ -161,6 +165,8 @@ function Card({ children, className = "" }: { children: React.ReactNode; classNa
 export default function ExecutiveDashboard({ quarter, compareQuarter, onExitCompare }: Props) {
   const [data, setData] = useState<ExecutiveMetrics | null>(null);
   const [compareData, setCompareData] = useState<ExecutiveMetrics | null>(null);
+  const [bugsData, setBugsData] = useState<QAReportedBugs | null>(null);
+  const [compareBugsData, setCompareBugsData] = useState<QAReportedBugs | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -171,18 +177,29 @@ export default function ExecutiveDashboard({ quarter, compareQuarter, onExitComp
       setLoading(true);
       setError(null);
       try {
-        const response = await fetch(`${API_BASE}/api/dx/executive?quarter=${quarter}`);
-        if (!response.ok) throw new Error("Failed to fetch executive metrics");
-        const result = await response.json();
-        setData(result);
+        const fetchJson = async <T,>(url: string): Promise<T | null> => {
+          const r = await fetch(url);
+          return r.ok ? ((await r.json()) as T) : null;
+        };
+
+        const [exec, bugs] = await Promise.all([
+          fetchJson<ExecutiveMetrics>(`${API_BASE}/api/dx/executive?quarter=${quarter}`),
+          fetchJson<QAReportedBugs>(`${API_BASE}/api/jira/qa-reported-bugs?quarter=${quarter}`),
+        ]);
+        if (!exec) throw new Error("Failed to fetch executive metrics");
+        setData(exec);
+        setBugsData(bugs);
 
         if (compareQuarter) {
-          const compareResponse = await fetch(`${API_BASE}/api/dx/executive?quarter=${compareQuarter}`);
-          if (compareResponse.ok) {
-            setCompareData(await compareResponse.json());
-          }
+          const [execCmp, bugsCmp] = await Promise.all([
+            fetchJson<ExecutiveMetrics>(`${API_BASE}/api/dx/executive?quarter=${compareQuarter}`),
+            fetchJson<QAReportedBugs>(`${API_BASE}/api/jira/qa-reported-bugs?quarter=${compareQuarter}`),
+          ]);
+          setCompareData(execCmp);
+          setCompareBugsData(bugsCmp);
         } else {
           setCompareData(null);
+          setCompareBugsData(null);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
@@ -311,14 +328,21 @@ export default function ExecutiveDashboard({ quarter, compareQuarter, onExitComp
       {/* Executive KPIs */}
       <section>
         <SectionHeader title="Executive Summary" subtitle={periodLabel} />
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
           <KPICard
-            title="Open Bugs"
-            value={data.open_bugs}
-            description={`${data.critical_bugs} critical`}
-            trend={isComparing ? calculateTrend(data.open_bugs, compareData?.open_bugs) : undefined}
+            title="QA-Reported Bugs"
+            value={bugsData?.total ?? data.open_bugs}
+            description={`${bugsData?.critical ?? data.critical_bugs} high priority`}
+            trend={
+              isComparing
+                ? calculateTrend(
+                    bugsData?.total ?? data.open_bugs,
+                    compareBugsData?.total ?? compareData?.open_bugs
+                  )
+                : undefined
+            }
             trendInverted={true}
-            color={data.open_bugs > 20 ? "error" : data.open_bugs > 10 ? "warning" : "success"}
+            color={(bugsData?.total ?? data.open_bugs) > 20 ? "error" : (bugsData?.total ?? data.open_bugs) > 10 ? "warning" : "success"}
           />
           <KPICard
             title="Resolution Rate"
@@ -338,18 +362,42 @@ export default function ExecutiveDashboard({ quarter, compareQuarter, onExitComp
             color="info"
           />
           <KPICard
-            title="PRs Merged"
+            title="Total PRs"
+            value={data.prs_opened}
+            description={periodLabel}
+            trend={isComparing ? calculateTrend(data.prs_opened, compareData?.prs_opened) : undefined}
+            color="info"
+          />
+          <KPICard
+            title="Total Merges"
             value={data.prs_merged}
             description={periodLabel}
             trend={isComparing ? calculateTrend(data.prs_merged, compareData?.prs_merged) : undefined}
             color="info"
           />
           <KPICard
-            title="PRs Opened"
-            value={data.prs_opened}
-            description={periodLabel}
-            trend={isComparing ? calculateTrend(data.prs_opened, compareData?.prs_opened) : undefined}
-            color="info"
+            title="Avg Merge Time"
+            value={data.avg_pr_merge_time_hours ? Math.round(data.avg_pr_merge_time_hours) : 0}
+            suffix="h"
+            description="Open to merge"
+            trend={
+              isComparing
+                ? calculateTrend(
+                    data.avg_pr_merge_time_hours ?? 0,
+                    compareData?.avg_pr_merge_time_hours ?? undefined
+                  )
+                : undefined
+            }
+            trendInverted={true}
+            color={
+              data.avg_pr_merge_time_hours == null
+                ? "info"
+                : data.avg_pr_merge_time_hours <= 24
+                ? "success"
+                : data.avg_pr_merge_time_hours <= 72
+                ? "warning"
+                : "error"
+            }
           />
           <KPICard
             title="Story Points"
@@ -390,11 +438,6 @@ export default function ExecutiveDashboard({ quarter, compareQuarter, onExitComp
               <p className="text-4xl font-bold text-[var(--warning-base)]">{data.story_points_in_progress}</p>
               <p className="text-xs text-[var(--text-muted)] mt-1">story points</p>
             </Card>
-            <Card className="text-center">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">Avg Merge Time</p>
-              <p className="text-4xl font-bold text-[var(--info-base)]">{data.avg_pr_merge_time_hours ? Math.round(data.avg_pr_merge_time_hours) : 0}</p>
-              <p className="text-xs text-[var(--text-muted)] mt-1">hours</p>
-            </Card>
           </div>
 
           <Card className="lg:col-span-4">
@@ -421,38 +464,6 @@ export default function ExecutiveDashboard({ quarter, compareQuarter, onExitComp
           </Card>
         </div>
 
-        {/* Story Points by Member */}
-        {data.story_points_by_member.length > 0 && (
-          <Card className="mt-6">
-            <div className="mb-4">
-              <h3 className="text-base font-semibold text-[var(--text-primary)]">Story Points by Team Member</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--border-subtle)]">
-                    <th className="text-left py-3 px-4 text-[var(--text-muted)] font-medium">Member</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Completed</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">In Progress</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Total Issues</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Issues Done</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.story_points_by_member.map((m) => (
-                    <tr key={m.user_name} className="border-b border-[var(--border-subtle)]/40 hover:bg-[var(--bg-surface)]/50 transition-colors">
-                      <td className="py-3 px-4 font-medium text-[var(--text-primary)]">{m.user_name}</td>
-                      <td className="text-center py-3 px-4 text-[var(--success-base)] font-semibold">{m.completed_points}</td>
-                      <td className="text-center py-3 px-4 text-[var(--warning-base)]">{m.in_progress_points}</td>
-                      <td className="text-center py-3 px-4 text-[var(--text-tertiary)]">{m.total_issues}</td>
-                      <td className="text-center py-3 px-4 text-[var(--info-base)]">{m.issues_completed}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
       </section>
 
       {/* Quality & Defects */}
@@ -525,93 +536,35 @@ export default function ExecutiveDashboard({ quarter, compareQuarter, onExitComp
         </div>
       </section>
 
-      {/* PR & Review Activity */}
+      {/* Review Activity Trend (aggregate weekly) */}
       <section>
-        <SectionHeader title="PR & Review Activity" badge="Team" />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Team Contributions */}
-          {data.team_contributions.length > 0 && (
-            <Card>
-              <div className="mb-4">
-                <h3 className="text-base font-semibold text-[var(--text-primary)]">PR Contributions</h3>
-                <p className="text-xs text-[var(--text-muted)] mt-1">{data.team_contributions.length} active members</p>
-              </div>
-              <ResponsiveContainer width="100%" height={Math.max(250, data.team_contributions.length * 35)}>
-                <BarChart data={data.team_contributions} layout="vertical" margin={{ left: 10, right: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
-                  <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
-                  <YAxis type="category" dataKey="user_name" stroke="var(--text-muted)" fontSize={11} width={120} tickLine={false} />
-                  <Tooltip {...tooltipStyle} />
-                  <Legend wrapperStyle={{ fontSize: "12px" }} />
-                  <Bar dataKey="prs_opened" name="Opened" fill="var(--chart-1)" radius={[0, 4, 4, 0]} />
-                  <Bar dataKey="prs_merged" name="Merged" fill="var(--chart-2)" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
+        <SectionHeader title="Review Activity" badge="Quarterly" />
+        <Card>
+          <div className="mb-4">
+            <h3 className="text-base font-semibold text-[var(--text-primary)]">Code Reviews per Week</h3>
+            <p className="text-xs text-[var(--text-muted)] mt-1">Total reviews completed by the QA team</p>
+          </div>
+          {reviewTrendData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <AreaChart data={reviewTrendData}>
+                <defs>
+                  <linearGradient id="colorReviews" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--chart-4)" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="var(--chart-4)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                <XAxis dataKey="week" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                <YAxis stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
+                <Tooltip {...tooltipStyle} />
+                <Legend wrapperStyle={{ fontSize: "12px" }} />
+                <Area type="monotone" dataKey="Reviews" stroke="var(--chart-4)" strokeWidth={2} fill="url(#colorReviews)" dot={{ r: 3 }} />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-[250px] text-[var(--text-muted)]">No review trend data</div>
           )}
-
-          {/* Review Trend */}
-          <Card>
-            <div className="mb-4">
-              <h3 className="text-base font-semibold text-[var(--text-primary)]">Review Activity Trend</h3>
-              <p className="text-xs text-[var(--text-muted)] mt-1">Code reviews completed per week</p>
-            </div>
-            {reviewTrendData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={250}>
-                <AreaChart data={reviewTrendData}>
-                  <defs>
-                    <linearGradient id="colorReviews" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--chart-4)" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="var(--chart-4)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
-                  <XAxis dataKey="week" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
-                  <YAxis stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
-                  <Tooltip {...tooltipStyle} />
-                  <Legend wrapperStyle={{ fontSize: "12px" }} />
-                  <Area type="monotone" dataKey="Reviews" stroke="var(--chart-4)" strokeWidth={2} fill="url(#colorReviews)" dot={{ r: 3 }} />
-                </AreaChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="flex items-center justify-center h-[250px] text-[var(--text-muted)]">No review trend data</div>
-            )}
-          </Card>
-        </div>
-
-        {/* Top Reviewers Table */}
-        {data.top_reviewers.length > 0 && (
-          <Card className="mt-6">
-            <div className="mb-4">
-              <h3 className="text-base font-semibold text-[var(--text-primary)]">Top Reviewers</h3>
-              <p className="text-xs text-[var(--text-muted)] mt-1">Code review activity breakdown</p>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--border-subtle)]">
-                    <th className="text-left py-3 px-4 text-[var(--text-muted)] font-medium">Reviewer</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Total</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Approved</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Changes</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Comments</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.top_reviewers.map((r) => (
-                    <tr key={r.user_name} className="border-b border-[var(--border-subtle)]/40 hover:bg-[var(--bg-surface)]/50 transition-colors">
-                      <td className="py-3 px-4 font-medium text-[var(--text-primary)]">{r.user_name}</td>
-                      <td className="text-center py-3 px-4 text-[var(--info-base)] font-semibold">{r.reviews_given}</td>
-                      <td className="text-center py-3 px-4 text-[var(--success-base)]">{r.approvals}</td>
-                      <td className="text-center py-3 px-4 text-[var(--warning-base)]">{r.changes_requested}</td>
-                      <td className="text-center py-3 px-4 text-[var(--text-tertiary)]">{r.comments}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
+        </Card>
       </section>
 
       {/* Comparison Summary */}
@@ -623,7 +576,7 @@ export default function ExecutiveDashboard({ quarter, compareQuarter, onExitComp
               <p className="text-xs uppercase tracking-wider text-[var(--text-muted)] mb-1">Bug Delta</p>
               <div className="flex items-center gap-2">
                 <span className="text-2xl font-bold text-[var(--text-primary)]">
-                  {data.open_bugs - compareData.open_bugs}
+                  {(bugsData?.total ?? data.open_bugs) - (compareBugsData?.total ?? compareData.open_bugs)}
                 </span>
               </div>
             </div>

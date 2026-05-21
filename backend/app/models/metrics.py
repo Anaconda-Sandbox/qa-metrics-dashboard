@@ -117,6 +117,12 @@ class BugPriorityBreakdown(BaseModel):
     total: int = 0
 
 
+class QAReportedBugsResponse(BaseModel):
+    quarter: str
+    total: int = 0
+    critical: int = 0
+
+
 class BugStatusBreakdown(BaseModel):
     by_status: dict[str, int] = {}
     total: int = 0

@@ -14,6 +14,7 @@ from app.models.metrics import (
     BugStatusBreakdown,
     DefectDensityResponse,
     MemberStoryPoints,
+    QAReportedBugsResponse,
     SprintInfo,
     SprintVelocity,
     StoryPointsResponse,
@@ -97,6 +98,74 @@ def _quarter_created_jql(quarter: str | None) -> str:
     if start and end:
         return f" AND created >= '{start}' AND created <= '{end}'"
     return ""
+
+
+def _quarter_bounds(quarter: str | None) -> tuple[str, str, str]:
+    """Return (start, exclusive_end, label) for a quarter like '2026-Q2'.
+
+    Falls back to the current quarter when input is missing/invalid.
+    Exclusive end = first day of the following quarter, matching JQL `created < end`.
+    """
+    try:
+        if quarter:
+            year_str, q_str = quarter.split("-Q")
+            year = int(year_str)
+            q = int(q_str)
+        else:
+            raise ValueError
+    except (ValueError, AttributeError):
+        now = datetime.now()
+        q = (now.month - 1) // 3 + 1
+        year = now.year
+
+    start_month = (q - 1) * 3 + 1
+    start = datetime(year, start_month, 1)
+    end = datetime(year + 1, 1, 1) if q == 4 else datetime(year, start_month + 3, 1)
+    label = f"{year}-Q{q}"
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), label
+
+
+async def get_qa_reported_bugs(quarter: str | None = None, use_cache: bool = True) -> QAReportedBugsResponse:
+    """Bugs reported by QA team in a given quarter (total + critical count).
+
+    Critical = priority in (Highest, High), matching the convention used in
+    dx_service for the executive dashboard.
+    """
+    start, end, label = _quarter_bounds(quarter)
+    cache_key = f"qa_reported_bugs:{label}"
+
+    if use_cache:
+        cached = cache_service.cache_get(cache_key)
+        if cached:
+            return QAReportedBugsResponse(**cached)
+
+    try:
+        fields = "priority"
+        date_clause = f'created >= "{start}" AND created < "{end}"'
+        total_jql = (
+            f'issuetype = Bug AND reporter in membersOf("QA") AND {date_clause} '
+            f'ORDER BY created DESC'
+        )
+        critical_jql = (
+            f'issuetype = Bug AND reporter in membersOf("QA") AND {date_clause} '
+            f'AND priority in (Highest, High)'
+        )
+
+        total_data = await _jql_search(total_jql, fields, max_results=2000)
+        critical_data = await _jql_search(critical_jql, fields, max_results=2000)
+
+        result = QAReportedBugsResponse(
+            quarter=label,
+            total=len(total_data.get("issues", [])),
+            critical=len(critical_data.get("issues", [])),
+        )
+
+        cache_service.cache_set(cache_key, result.model_dump(), ttl=900)
+        return result
+
+    except httpx.HTTPError as e:
+        logger.error(f"Jira API error in get_qa_reported_bugs: {e}")
+        raise
 
 
 async def get_defect_density(squad: str | None = None, project: str | None = None, quarter: str | None = None, use_cache: bool = True) -> DefectDensityResponse:
