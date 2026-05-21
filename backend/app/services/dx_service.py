@@ -116,14 +116,22 @@ async def _make_dx_request(method: str, endpoint: str, params: dict = None, json
         else:
             response = await client.post(url, headers=headers, json=json_data)
 
-        if response.status_code != 200:
+        # Parse JSON for all responses including error codes
+        try:
+            data = response.json()
+        except Exception:
             logger.error(f"DX API error: {response.status_code} - {response.text[:200]}")
             return {"ok": False, "error": f"HTTP {response.status_code}"}
 
-        return response.json()
+        # 200 OK, 202 Accepted (async), or 409 Conflict (query not complete yet)
+        if response.status_code in (200, 202, 409):
+            return data
+
+        logger.error(f"DX API error: {response.status_code} - {response.text[:200]}")
+        return {"ok": False, "error": f"HTTP {response.status_code}"}
 
 
-async def _run_sql_query(sql: str, timeout_seconds: int = 30) -> list[dict]:
+async def _run_sql_query(sql: str, timeout_seconds: int = 60) -> list[dict]:
     """Execute SQL query against DX Data Cloud and return results."""
     result = await _make_dx_request("POST", "studio.queryRuns.execute", json_data={"sql": sql})
 
@@ -132,25 +140,31 @@ async def _run_sql_query(sql: str, timeout_seconds: int = 30) -> list[dict]:
         return []
 
     query_id = result["query_run"]["id"]
+    logger.debug(f"Query submitted with ID: {query_id}")
 
-    # Poll for results
-    for _ in range(timeout_seconds):
-        await asyncio.sleep(1)
+    # Poll for results with longer timeout for complex queries
+    wait_times = [1, 1, 2, 2, 3, 3, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]  # Total ~90s
+    for wait_time in wait_times:
+        await asyncio.sleep(wait_time)
         results = await _make_dx_request("GET", f"studio.queryRuns.results?id={query_id}")
 
         if results.get("ok") and results.get("results"):
             columns = results["results"]["columns"]
             rows = results["results"]["rows"]
+            logger.debug(f"Query {query_id} returned {len(rows)} rows")
             return [dict(zip(columns, row)) for row in rows]
 
-        if results.get("error") == "not_found":
-            continue  # Still processing
+        # Still processing - continue polling
+        error = results.get("error", "")
+        if error in ("not_found", "execution_not_complete"):
+            continue
 
-        if results.get("error"):
-            logger.error(f"Query error: {results.get('error')}")
+        # Actual error
+        if error:
+            logger.error(f"Query error for {query_id}: {error}")
             return []
 
-    logger.warning(f"Query timed out after {timeout_seconds}s")
+    logger.warning(f"Query {query_id} timed out after polling")
     return []
 
 
@@ -350,6 +364,442 @@ async def get_pr_metrics_for_quarter(quarter: str) -> PRMetrics | None:
         avg_review_cycles=float(row.get("avg_reviews") or 0) if row.get("avg_reviews") else None,
         prs_by_week=prs_by_week
     )
+
+
+class AIToolUsage(BaseModel):
+    """AI tool usage per user."""
+    user_name: str
+    email: str
+    ai_tool: str
+    active_days: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_spend_dollars: float = 0
+    last_active_date: str | None = None
+
+
+class PRReviewStats(BaseModel):
+    """PR review stats per user."""
+    user_name: str
+    email: str
+    prs_authored: int = 0
+    reviews_done: int = 0
+    review_comments: int = 0
+
+
+class DefectDensityByProject(BaseModel):
+    """Defect density per project."""
+    project_name: str
+    total_issues: int = 0
+    bug_count: int = 0
+    defect_density_pct: float = 0
+
+
+class QADataCloudMetrics(BaseModel):
+    """QA metrics pulled from DX Data Cloud."""
+    # Quality metrics
+    defect_density: float | None = None
+    bug_count_by_priority: dict[str, int] = {}
+    bug_resolution_rate: float | None = None
+    reopen_rate: float | None = None
+
+    # Velocity metrics
+    tickets_completed: int = 0
+    cycle_time_avg_hours: float | None = None
+    sprint_completion_rate: float | None = None
+    backlog_size: int = 0
+
+    # Pipeline metrics
+    pipeline_pass_rate: float | None = None
+    pipeline_fail_rate: float | None = None
+    total_pipeline_runs: int = 0
+    avg_pipeline_duration_minutes: float | None = None
+
+    # AI Adoption
+    copilot_active_users: int = 0
+    copilot_acceptance_rate: float | None = None
+    copilot_loc_suggested: int = 0
+    copilot_loc_accepted: int = 0
+    cursor_active_users: int = 0
+
+    # AI Tool Usage Details
+    ai_tool_usage: list[AIToolUsage] = []
+
+    # PR Review Stats
+    pr_review_stats: list[PRReviewStats] = []
+
+    # Defect Density by Project
+    defect_density_by_project: list[DefectDensityByProject] = []
+
+
+async def _get_pr_review_stats(start_date: str, end_date: str) -> list[dict]:
+    """Get PR authoring and review stats for QA team."""
+    sql = f"""
+    WITH qa_users AS (
+      SELECT du.id AS dx_user_id, du.name, du.email
+      FROM dx_users du
+      JOIN dx_teams dt ON du.team_id = dt.id
+      WHERE dt.source_id = '{QA_TEAM_ID}'
+        AND du.deleted_at IS NULL
+    ),
+    prs AS (
+      SELECT pr.dx_user_id, COUNT(DISTINCT pr.id) AS prs_authored
+      FROM pull_requests pr
+      WHERE pr.merged >= '{start_date}' AND pr.merged < '{end_date}'
+        AND pr.dx_user_id IN (SELECT dx_user_id FROM qa_users)
+        AND pr.bot_authored = false
+      GROUP BY pr.dx_user_id
+    ),
+    reviews AS (
+      SELECT prr.dx_user_id,
+        COUNT(DISTINCT prr.pull_request_id) AS reviews_done,
+        SUM(prr.comment_count) AS total_comments
+      FROM pull_request_reviews prr
+      WHERE prr.created >= '{start_date}' AND prr.created < '{end_date}'
+        AND prr.dx_user_id IN (SELECT dx_user_id FROM qa_users)
+        AND prr.bot_authored = false
+      GROUP BY prr.dx_user_id
+    )
+    SELECT
+      qu.name AS user_name,
+      qu.email,
+      COALESCE(p.prs_authored, 0) AS prs_authored,
+      COALESCE(r.reviews_done, 0) AS reviews_done,
+      COALESCE(r.total_comments, 0) AS review_comments
+    FROM qa_users qu
+    LEFT JOIN prs p ON qu.dx_user_id = p.dx_user_id
+    LEFT JOIN reviews r ON qu.dx_user_id = r.dx_user_id
+    WHERE COALESCE(p.prs_authored, 0) > 0 OR COALESCE(r.reviews_done, 0) > 0
+    ORDER BY reviews_done DESC, prs_authored DESC
+    """
+    return await _run_sql_query(sql)
+
+
+async def _get_defect_density_by_project(start_date: str, end_date: str) -> list[dict]:
+    """Get defect density per project for QA team's work."""
+    sql = f"""
+    SELECT
+      jp.name AS project_name,
+      COUNT(ji.id) AS total_issues,
+      SUM(CASE WHEN jit.name ILIKE '%bug%' THEN 1 ELSE 0 END) AS bug_count,
+      ROUND(
+        (SUM(CASE WHEN jit.name ILIKE '%bug%' THEN 1 ELSE 0 END)::numeric / NULLIF(COUNT(ji.id), 0)) * 100,
+        2
+      ) AS defect_density_pct
+    FROM jira_issues ji
+    JOIN jira_projects jp ON ji.project_id = jp.id
+    JOIN jira_issue_types jit ON ji.issue_type_id = jit.id
+    JOIN jira_users ju ON ji.user_id = ju.id
+    JOIN dx_users du ON du.email = ju.email
+    JOIN dx_teams dt ON du.team_id = dt.id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND ji.deleted_at IS NULL
+      AND ji.created_at >= '{start_date}'
+      AND ji.created_at < '{end_date}'
+    GROUP BY jp.name
+    HAVING COUNT(ji.id) > 0
+    ORDER BY defect_density_pct DESC
+    """
+    return await _run_sql_query(sql)
+
+
+async def get_qa_data_cloud_metrics(quarter: str) -> QADataCloudMetrics:
+    """Get QA metrics from DX Data Cloud tables."""
+    start_date, end_date = _get_quarter_date_range(quarter)
+
+    # Run all queries in parallel
+    results = await asyncio.gather(
+        _get_bug_metrics(start_date, end_date),
+        _get_cycle_time_metrics(start_date, end_date),
+        _get_pipeline_metrics(start_date, end_date),
+        _get_ai_adoption_metrics(start_date, end_date),
+        _get_pr_review_stats(start_date, end_date),
+        _get_defect_density_by_project(start_date, end_date),
+        return_exceptions=True
+    )
+
+    bug_metrics = results[0] if not isinstance(results[0], Exception) else {}
+    cycle_metrics = results[1] if not isinstance(results[1], Exception) else {}
+    pipeline_metrics = results[2] if not isinstance(results[2], Exception) else {}
+    ai_metrics = results[3] if not isinstance(results[3], Exception) else {}
+    pr_review_results = results[4] if not isinstance(results[4], Exception) else []
+    defect_by_project_results = results[5] if not isinstance(results[5], Exception) else []
+
+    # Parse AI tool usage
+    ai_tool_usage_list = [
+        AIToolUsage(**item) for item in ai_metrics.get("ai_tool_usage", [])
+    ]
+
+    # Parse PR review stats
+    pr_review_stats_list = [
+        PRReviewStats(
+            user_name=r.get("user_name", "Unknown"),
+            email=r.get("email", ""),
+            prs_authored=int(r.get("prs_authored", 0) or 0),
+            reviews_done=int(r.get("reviews_done", 0) or 0),
+            review_comments=int(r.get("review_comments", 0) or 0)
+        ) for r in pr_review_results
+    ]
+
+    # Parse defect density by project
+    defect_by_project_list = [
+        DefectDensityByProject(
+            project_name=r.get("project_name", "Unknown"),
+            total_issues=int(r.get("total_issues", 0) or 0),
+            bug_count=int(r.get("bug_count", 0) or 0),
+            defect_density_pct=float(r.get("defect_density_pct", 0) or 0)
+        ) for r in defect_by_project_results
+    ]
+
+    return QADataCloudMetrics(
+        # Quality
+        defect_density=bug_metrics.get("defect_density"),
+        bug_count_by_priority=bug_metrics.get("by_priority", {}),
+        bug_resolution_rate=bug_metrics.get("resolution_rate"),
+        reopen_rate=bug_metrics.get("reopen_rate"),
+
+        # Velocity
+        tickets_completed=cycle_metrics.get("completed", 0),
+        cycle_time_avg_hours=cycle_metrics.get("avg_cycle_time"),
+        sprint_completion_rate=cycle_metrics.get("sprint_completion"),
+        backlog_size=cycle_metrics.get("backlog", 0),
+
+        # Pipeline
+        pipeline_pass_rate=pipeline_metrics.get("pass_rate"),
+        pipeline_fail_rate=pipeline_metrics.get("fail_rate"),
+        total_pipeline_runs=pipeline_metrics.get("total_runs", 0),
+        avg_pipeline_duration_minutes=pipeline_metrics.get("avg_duration"),
+
+        # AI
+        copilot_active_users=ai_metrics.get("copilot_users", 0),
+        copilot_acceptance_rate=ai_metrics.get("copilot_acceptance"),
+        copilot_loc_suggested=ai_metrics.get("copilot_loc_suggested", 0),
+        copilot_loc_accepted=ai_metrics.get("copilot_loc_accepted", 0),
+        cursor_active_users=ai_metrics.get("cursor_users", 0),
+        ai_tool_usage=ai_tool_usage_list,
+        pr_review_stats=pr_review_stats_list,
+        defect_density_by_project=defect_by_project_list
+    )
+
+
+async def _get_bug_metrics(start_date: str, end_date: str) -> dict:
+    """Get bug/defect metrics from jira_issues table with proper JOINs."""
+    # Bug count by priority (with JOINs to lookup tables)
+    priority_sql = f"""
+    SELECT
+        p.name as priority,
+        COUNT(*) as count
+    FROM jira_issues i
+    LEFT JOIN jira_issue_types it ON i.issue_type_id = it.id
+    LEFT JOIN jira_priorities p ON i.priority_id = p.id
+    WHERE it.name IN ('Bug', 'Defect')
+      AND i.created_at >= '{start_date}'
+      AND i.created_at <= '{end_date}'
+    GROUP BY p.name
+    """
+
+    # Resolution rate (resolved = has resolution_date)
+    resolution_sql = f"""
+    SELECT
+        COUNT(*) as total_bugs,
+        SUM(CASE WHEN i.resolution_date IS NOT NULL THEN 1 ELSE 0 END) as resolved_bugs,
+        SUM(CASE WHEN r.name ILIKE '%reopen%' THEN 1 ELSE 0 END) as reopened
+    FROM jira_issues i
+    LEFT JOIN jira_issue_types it ON i.issue_type_id = it.id
+    LEFT JOIN jira_resolutions r ON i.resolution_id = r.id
+    WHERE it.name IN ('Bug', 'Defect')
+      AND i.created_at >= '{start_date}'
+      AND i.created_at <= '{end_date}'
+    """
+
+    # Total tickets for defect density calculation
+    total_sql = f"""
+    SELECT COUNT(*) as total_tickets
+    FROM jira_issues i
+    WHERE i.created_at >= '{start_date}'
+      AND i.created_at <= '{end_date}'
+    """
+
+    priority_results, resolution_results, total_results = await asyncio.gather(
+        _run_sql_query(priority_sql),
+        _run_sql_query(resolution_sql),
+        _run_sql_query(total_sql)
+    )
+
+    by_priority = {}
+    total_bugs = 0
+    for row in priority_results:
+        pname = row.get("priority", "Unknown") or "Unknown"
+        count = int(row.get("count", 0) or 0)
+        by_priority[pname] = count
+        total_bugs += count
+
+    result = {"by_priority": by_priority}
+
+    if resolution_results:
+        r = resolution_results[0]
+        total = int(r.get("total_bugs", 0) or 0)
+        resolved = int(r.get("resolved_bugs", 0) or 0)
+        reopened = int(r.get("reopened", 0) or 0)
+
+        if total > 0:
+            result["resolution_rate"] = round((resolved / total) * 100, 1)
+            result["reopen_rate"] = round((reopened / total) * 100, 1)
+
+    if total_results:
+        total_tickets = int(total_results[0].get("total_tickets", 0) or 0)
+        if total_tickets > 0:
+            result["defect_density"] = round((total_bugs / total_tickets) * 100, 1)
+
+    return result
+
+
+async def _get_cycle_time_metrics(start_date: str, end_date: str) -> dict:
+    """Get cycle time and velocity metrics using proper table structure."""
+    # Completed issues (have resolution_date in the quarter)
+    cycle_sql = f"""
+    SELECT
+        COUNT(*) as completed,
+        AVG(i.cycle_time) as avg_cycle_hours,
+        SUM(i.story_points) as total_points
+    FROM jira_issues i
+    WHERE i.resolution_date IS NOT NULL
+      AND i.resolution_date >= '{start_date}'
+      AND i.resolution_date <= '{end_date}'
+    """
+
+    # Backlog (no resolution_date, created before end of quarter)
+    backlog_sql = f"""
+    SELECT COUNT(*) as backlog
+    FROM jira_issues i
+    WHERE i.resolution_date IS NULL
+      AND i.created_at <= '{end_date}'
+    """
+
+    cycle_results, backlog_results = await asyncio.gather(
+        _run_sql_query(cycle_sql),
+        _run_sql_query(backlog_sql)
+    )
+
+    result = {}
+
+    if cycle_results:
+        r = cycle_results[0]
+        result["completed"] = int(r.get("completed", 0) or 0)
+        if r.get("avg_cycle_hours"):
+            # cycle_time is in seconds, convert to hours
+            avg_seconds = float(r["avg_cycle_hours"])
+            result["avg_cycle_time"] = round(avg_seconds / 3600, 1)
+
+    if backlog_results:
+        result["backlog"] = int(backlog_results[0].get("backlog", 0) or 0)
+
+    return result
+
+
+async def _get_pipeline_metrics(start_date: str, end_date: str) -> dict:
+    """Get CI/CD pipeline metrics from github_pull_deployments if available."""
+    # Use github_pull_deployments as a proxy for CI/CD pipeline data
+    pipeline_sql = f"""
+    SELECT
+        COUNT(*) as total_runs,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as passed,
+        SUM(CASE WHEN status = 'failure' THEN 1 ELSE 0 END) as failed
+    FROM github_pull_deployments
+    WHERE created_at >= '{start_date}'
+      AND created_at <= '{end_date}'
+    """
+
+    results = await _run_sql_query(pipeline_sql)
+
+    if not results:
+        return {}
+
+    r = results[0]
+    total = int(r.get("total_runs", 0) or 0)
+    passed = int(r.get("passed", 0) or 0)
+    failed = int(r.get("failed", 0) or 0)
+
+    result = {"total_runs": total}
+
+    if total > 0:
+        result["pass_rate"] = round((passed / total) * 100, 1)
+        result["fail_rate"] = round((failed / total) * 100, 1)
+
+    return result
+
+
+async def _get_ai_adoption_metrics(start_date: str, end_date: str) -> dict:
+    """Get AI tool adoption metrics from DX Data Cloud."""
+    # AI Tool usage per user for QA team
+    ai_tool_sql = f"""
+    SELECT
+        du.name AS user_name,
+        du.email,
+        at.name AS ai_tool,
+        COUNT(DISTINCT atdm.date) AS active_days,
+        SUM(atdm.input_tokens) AS total_input_tokens,
+        SUM(atdm.output_tokens) AS total_output_tokens,
+        ROUND(SUM(atdm.spend_cents)::numeric / 100, 2) AS total_spend_dollars,
+        MAX(atdm.date) AS last_active_date
+    FROM ai_tool_daily_metrics atdm
+    JOIN ai_tools at ON at.id = atdm.ai_tool_id
+    JOIN dx_users du ON du.id = atdm.dx_user_id
+    JOIN dx_teams dt ON dt.id = du.team_id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND atdm.date >= '{start_date}'
+      AND atdm.date <= '{end_date}'
+    GROUP BY du.name, du.email, at.name
+    ORDER BY total_spend_dollars DESC, active_days DESC
+    """
+
+    # Also get Copilot metrics
+    copilot_sql = f"""
+    SELECT
+        SUM(total_active_users) as active_users,
+        SUM(total_acceptances_count) as accepted,
+        SUM(total_suggestions_count) as shown,
+        SUM(total_lines_suggested) as loc_suggested,
+        SUM(total_lines_accepted) as loc_accepted
+    FROM github_copilot_usages
+    WHERE day >= '{start_date}'
+      AND day <= '{end_date}'
+    """
+
+    ai_tool_results, copilot_results = await asyncio.gather(
+        _run_sql_query(ai_tool_sql),
+        _run_sql_query(copilot_sql)
+    )
+
+    result = {"ai_tool_usage": []}
+
+    # Process AI tool usage
+    if ai_tool_results:
+        for row in ai_tool_results:
+            result["ai_tool_usage"].append({
+                "user_name": row.get("user_name", "Unknown"),
+                "email": row.get("email", ""),
+                "ai_tool": row.get("ai_tool", "Unknown"),
+                "active_days": int(row.get("active_days", 0) or 0),
+                "total_input_tokens": int(row.get("total_input_tokens", 0) or 0),
+                "total_output_tokens": int(row.get("total_output_tokens", 0) or 0),
+                "total_spend_dollars": float(row.get("total_spend_dollars", 0) or 0),
+                "last_active_date": row.get("last_active_date")
+            })
+
+    # Process Copilot metrics
+    if copilot_results:
+        r = copilot_results[0]
+        result["copilot_users"] = int(r.get("active_users", 0) or 0)
+        result["copilot_loc_suggested"] = int(r.get("loc_suggested", 0) or 0)
+        result["copilot_loc_accepted"] = int(r.get("loc_accepted", 0) or 0)
+
+        shown = int(r.get("shown", 0) or 0)
+        accepted = int(r.get("accepted", 0) or 0)
+        if shown > 0:
+            result["copilot_acceptance"] = round((accepted / shown) * 100, 1)
+
+    return result
 
 
 async def get_dora_metrics_for_quarter(quarter: str) -> DORAMetrics:
@@ -712,3 +1162,724 @@ async def sync_dx_data_for_quarter(db, quarter: str, force: bool = False) -> dic
         "from_cache": False,
         "last_updated": datetime.utcnow().isoformat()
     }
+
+
+# ============ DORA, TEAM, BENCHMARKS CACHING ============
+
+def get_dora_from_db(db, quarter: str):
+    """Get cached DORA metrics."""
+    from app.database import DXDORAMetrics
+    return db.query(DXDORAMetrics).filter(DXDORAMetrics.quarter == quarter).first()
+
+
+def save_dora_to_db(db, quarter: str, dora: DORAMetrics):
+    """Save DORA metrics to DB."""
+    from app.database import DXDORAMetrics
+    existing = get_dora_from_db(db, quarter)
+    if existing:
+        existing.deployment_frequency = dora.deployment_frequency
+        existing.lead_time_for_changes = dora.lead_time_for_changes
+        existing.mean_time_to_recovery = dora.mean_time_to_recovery
+        existing.change_failure_rate = dora.change_failure_rate
+        existing.updated_at = datetime.utcnow()
+    else:
+        db.add(DXDORAMetrics(
+            quarter=quarter,
+            deployment_frequency=dora.deployment_frequency,
+            lead_time_for_changes=dora.lead_time_for_changes,
+            mean_time_to_recovery=dora.mean_time_to_recovery,
+            change_failure_rate=dora.change_failure_rate
+        ))
+    db.commit()
+
+
+async def get_cached_dora_metrics(db, quarter: str, force: bool = False) -> DORAMetrics:
+    """Get DORA metrics with DB caching (6hr TTL)."""
+    if not force:
+        cached = get_dora_from_db(db, quarter)
+        if cached and cached.updated_at:
+            if datetime.utcnow() - cached.updated_at < timedelta(hours=6):
+                return DORAMetrics(
+                    deployment_frequency=cached.deployment_frequency,
+                    lead_time_for_changes=cached.lead_time_for_changes,
+                    mean_time_to_recovery=cached.mean_time_to_recovery,
+                    change_failure_rate=cached.change_failure_rate
+                )
+
+    dora = await get_dora_metrics_for_quarter(quarter)
+    save_dora_to_db(db, quarter, dora)
+    return dora
+
+
+def get_team_from_db(db, team_id: str):
+    """Get cached team info."""
+    from app.database import DXTeamInfo
+    return db.query(DXTeamInfo).filter(DXTeamInfo.team_id == team_id).first()
+
+
+def save_team_to_db(db, team: DXTeamInfo):
+    """Save team info to DB."""
+    from app.database import DXTeamInfo as DBTeamInfo
+    existing = get_team_from_db(db, team.id)
+    members_data = [m.model_dump() for m in team.members]
+    if existing:
+        existing.name = team.name
+        existing.manager_name = team.manager_name
+        existing.manager_email = team.manager_email
+        existing.contributor_count = team.contributor_count
+        existing.members = members_data
+        existing.updated_at = datetime.utcnow()
+    else:
+        db.add(DBTeamInfo(
+            team_id=team.id,
+            name=team.name,
+            manager_name=team.manager_name,
+            manager_email=team.manager_email,
+            contributor_count=team.contributor_count,
+            members=members_data
+        ))
+    db.commit()
+
+
+async def get_cached_team_info(db, force: bool = False) -> DXTeamInfo | None:
+    """Get team info with DB caching (24hr TTL)."""
+    if not force:
+        cached = get_team_from_db(db, QA_TEAM_ID)
+        if cached and cached.updated_at:
+            if datetime.utcnow() - cached.updated_at < timedelta(hours=24):
+                members = [DXTeamMember(**m) for m in (cached.members or [])]
+                return DXTeamInfo(
+                    id=cached.team_id,
+                    name=cached.name,
+                    manager_name=cached.manager_name,
+                    manager_email=cached.manager_email,
+                    contributor_count=cached.contributor_count,
+                    members=members
+                )
+
+    team = await get_team_info()
+    if team:
+        save_team_to_db(db, team)
+    return team
+
+
+def get_benchmarks_from_db(db, snapshot_id: str):
+    """Get cached benchmarks."""
+    from app.database import DXBenchmarks
+    return db.query(DXBenchmarks).filter(DXBenchmarks.snapshot_id == snapshot_id).first()
+
+
+def save_benchmarks_to_db(db, snapshot_id: str, benchmarks: dict):
+    """Save benchmarks to DB."""
+    from app.database import DXBenchmarks
+    existing = get_benchmarks_from_db(db, snapshot_id)
+    if existing:
+        existing.benchmarks = benchmarks
+        existing.updated_at = datetime.utcnow()
+    else:
+        db.add(DXBenchmarks(snapshot_id=snapshot_id, benchmarks=benchmarks))
+    db.commit()
+
+
+async def get_cached_benchmarks(db, snapshot_id: str, force: bool = False) -> dict | None:
+    """Get benchmarks with DB caching (24hr TTL)."""
+    if not force:
+        cached = get_benchmarks_from_db(db, snapshot_id)
+        if cached and cached.updated_at:
+            if datetime.utcnow() - cached.updated_at < timedelta(hours=24):
+                return cached.benchmarks
+
+    benchmarks = await get_org_benchmarks(snapshot_id)
+    save_benchmarks_to_db(db, snapshot_id, benchmarks)
+    return benchmarks
+
+
+# ============ QA CLOUD METRICS DATABASE FUNCTIONS ============
+
+def save_qa_cloud_metrics_to_db(db, quarter: str, metrics: QADataCloudMetrics):
+    """Save QA Cloud metrics to database for caching."""
+    from app.database import DXQACloudMetrics
+
+    existing = db.query(DXQACloudMetrics).filter(DXQACloudMetrics.quarter == quarter).first()
+
+    if existing:
+        existing.defect_density = metrics.defect_density
+        existing.bug_count_by_priority = metrics.bug_count_by_priority
+        existing.bug_resolution_rate = metrics.bug_resolution_rate
+        existing.reopen_rate = metrics.reopen_rate
+        existing.tickets_completed = metrics.tickets_completed
+        existing.cycle_time_avg_hours = metrics.cycle_time_avg_hours
+        existing.sprint_completion_rate = metrics.sprint_completion_rate
+        existing.backlog_size = metrics.backlog_size
+        existing.pipeline_pass_rate = metrics.pipeline_pass_rate
+        existing.pipeline_fail_rate = metrics.pipeline_fail_rate
+        existing.total_pipeline_runs = metrics.total_pipeline_runs
+        existing.avg_pipeline_duration_minutes = metrics.avg_pipeline_duration_minutes
+        existing.copilot_active_users = metrics.copilot_active_users
+        existing.copilot_acceptance_rate = metrics.copilot_acceptance_rate
+        existing.copilot_loc_suggested = metrics.copilot_loc_suggested
+        existing.copilot_loc_accepted = metrics.copilot_loc_accepted
+        existing.cursor_active_users = metrics.cursor_active_users
+        existing.ai_tool_usage = [u.model_dump() for u in metrics.ai_tool_usage]
+        existing.pr_review_stats = [s.model_dump() for s in metrics.pr_review_stats]
+        existing.defect_density_by_project = [d.model_dump() for d in metrics.defect_density_by_project]
+        existing.updated_at = datetime.utcnow()
+    else:
+        db_metrics = DXQACloudMetrics(
+            quarter=quarter,
+            defect_density=metrics.defect_density,
+            bug_count_by_priority=metrics.bug_count_by_priority,
+            bug_resolution_rate=metrics.bug_resolution_rate,
+            reopen_rate=metrics.reopen_rate,
+            tickets_completed=metrics.tickets_completed,
+            cycle_time_avg_hours=metrics.cycle_time_avg_hours,
+            sprint_completion_rate=metrics.sprint_completion_rate,
+            backlog_size=metrics.backlog_size,
+            pipeline_pass_rate=metrics.pipeline_pass_rate,
+            pipeline_fail_rate=metrics.pipeline_fail_rate,
+            total_pipeline_runs=metrics.total_pipeline_runs,
+            avg_pipeline_duration_minutes=metrics.avg_pipeline_duration_minutes,
+            copilot_active_users=metrics.copilot_active_users,
+            copilot_acceptance_rate=metrics.copilot_acceptance_rate,
+            copilot_loc_suggested=metrics.copilot_loc_suggested,
+            copilot_loc_accepted=metrics.copilot_loc_accepted,
+            cursor_active_users=metrics.cursor_active_users,
+            ai_tool_usage=[u.model_dump() for u in metrics.ai_tool_usage],
+            pr_review_stats=[s.model_dump() for s in metrics.pr_review_stats],
+            defect_density_by_project=[d.model_dump() for d in metrics.defect_density_by_project]
+        )
+        db.add(db_metrics)
+
+    db.commit()
+    logger.info(f"Saved QA Cloud metrics for {quarter} to database")
+
+
+def get_qa_cloud_metrics_from_db(db, quarter: str) -> QADataCloudMetrics | None:
+    """Get QA Cloud metrics from database if available."""
+    from app.database import DXQACloudMetrics
+
+    cached = db.query(DXQACloudMetrics).filter(DXQACloudMetrics.quarter == quarter).first()
+    if not cached:
+        return None
+
+    # Parse AI tool usage from JSON
+    ai_tool_usage = [AIToolUsage(**item) for item in (cached.ai_tool_usage or [])]
+
+    # Parse PR review stats from JSON
+    pr_review_stats = [PRReviewStats(**item) for item in (cached.pr_review_stats or [])]
+
+    # Parse defect density by project from JSON
+    defect_density_by_project = [DefectDensityByProject(**item) for item in (cached.defect_density_by_project or [])]
+
+    return QADataCloudMetrics(
+        defect_density=cached.defect_density,
+        bug_count_by_priority=cached.bug_count_by_priority or {},
+        bug_resolution_rate=cached.bug_resolution_rate,
+        reopen_rate=cached.reopen_rate,
+        tickets_completed=cached.tickets_completed,
+        cycle_time_avg_hours=cached.cycle_time_avg_hours,
+        sprint_completion_rate=cached.sprint_completion_rate,
+        backlog_size=cached.backlog_size,
+        pipeline_pass_rate=cached.pipeline_pass_rate,
+        pipeline_fail_rate=cached.pipeline_fail_rate,
+        total_pipeline_runs=cached.total_pipeline_runs,
+        avg_pipeline_duration_minutes=cached.avg_pipeline_duration_minutes,
+        copilot_active_users=cached.copilot_active_users,
+        copilot_acceptance_rate=cached.copilot_acceptance_rate,
+        copilot_loc_suggested=cached.copilot_loc_suggested,
+        copilot_loc_accepted=cached.copilot_loc_accepted,
+        cursor_active_users=cached.cursor_active_users,
+        ai_tool_usage=ai_tool_usage,
+        pr_review_stats=pr_review_stats,
+        defect_density_by_project=defect_density_by_project
+    ), cached.updated_at
+
+
+async def sync_qa_cloud_metrics(db, quarter: str, force: bool = False) -> QADataCloudMetrics:
+    """
+    Sync QA Cloud metrics from DX Data Cloud to database.
+    Returns cached data if available and not forcing refresh (cache TTL: 6 hours).
+    """
+    # Check for cached data (6 hour TTL since these queries are slow)
+    if not force:
+        result = get_qa_cloud_metrics_from_db(db, quarter)
+        if result:
+            cached_metrics, last_updated = result
+            if last_updated and datetime.utcnow() - last_updated < timedelta(hours=6):
+                logger.info(f"Using cached QA Cloud metrics for {quarter}")
+                return cached_metrics
+
+    # Fetch fresh data from DX Data Cloud
+    logger.info(f"Fetching fresh QA Cloud metrics for {quarter} from DX Data Cloud")
+    metrics = await get_qa_data_cloud_metrics(quarter)
+
+    # Save to database
+    save_qa_cloud_metrics_to_db(db, quarter, metrics)
+
+    return metrics
+
+
+# ============ EXECUTIVE DASHBOARD (DX Data Cloud Only) ============
+
+class ExecutiveMetrics(BaseModel):
+    """Executive dashboard metrics from DX Data Cloud."""
+    # Quality KPIs
+    open_bugs: int = 0
+    critical_bugs: int = 0
+    bug_resolution_rate: float | None = None
+    defect_density: float | None = None
+
+    # Velocity KPIs
+    story_points_completed: float = 0
+    story_points_in_progress: float = 0
+    tickets_completed: int = 0
+    avg_cycle_time_hours: float | None = None
+
+    # PR & Review KPIs
+    prs_merged: int = 0
+    prs_opened: int = 0
+    total_reviews: int = 0
+    avg_pr_merge_time_hours: float | None = None
+
+    # Weekly trends
+    defect_trend: list[dict] = []
+    pr_trend: list[dict] = []
+    velocity_trend: list[dict] = []
+    review_trend: list[dict] = []
+
+    # Team breakdown
+    team_contributions: list[dict] = []
+    story_points_by_member: list[dict] = []
+    top_reviewers: list[dict] = []
+
+
+async def _get_executive_bug_metrics(start_date: str, end_date: str) -> dict:
+    """Get bug metrics for executive dashboard using exact user query pattern."""
+    # Use exact same team hierarchy pattern that returns 132 bugs
+    sql = f"""
+    WITH qa_team_ids AS (
+      SELECT dxth.descendant_id as team_id FROM dx_teams dt
+      JOIN dx_team_hierarchies dxth ON dxth.ancestor_id = dt.id
+      WHERE dt.source_id = '{QA_TEAM_ID}'
+      UNION
+      SELECT dt2.id as team_id FROM dx_teams dt2 WHERE dt2.source_id = '{QA_TEAM_ID}'
+    ),
+    qa_jira_users AS (
+      SELECT ju.id
+      FROM jira_users ju
+      JOIN dx_users du ON LOWER(du.email) = LOWER(ju.email)
+      WHERE du.team_id IN (SELECT team_id FROM qa_team_ids)
+        AND du.deleted_at IS NULL
+    ),
+    qa_bugs AS (
+      SELECT ji.id, js.status_category, jp.name as priority_name
+      FROM jira_issues ji
+      JOIN jira_issue_types jit ON jit.id = ji.issue_type_id
+      JOIN jira_statuses js ON js.id = ji.status_id
+      LEFT JOIN jira_priorities jp ON jp.id = ji.priority_id
+      WHERE jit.name ILIKE '%bug%'
+        AND ji.deleted_at IS NULL
+        AND ji.created_at >= '{start_date}'
+        AND ji.created_at < '{end_date}'
+        AND (
+          ji.user_id IN (SELECT id FROM qa_jira_users)
+          OR ji.reporter_id IN (SELECT id FROM qa_jira_users)
+          OR ji.creator_id IN (SELECT id FROM qa_jira_users)
+        )
+    )
+    SELECT
+      COUNT(CASE WHEN status_category != 'Done' THEN 1 END) AS open_bugs,
+      COUNT(CASE WHEN status_category != 'Done' AND priority_name IN ('Highest', 'High') THEN 1 END) AS critical_bugs,
+      COUNT(*) AS total_bugs,
+      COUNT(CASE WHEN status_category = 'Done' THEN 1 END) AS resolved_bugs
+    FROM qa_bugs
+    """
+
+    results = await _run_sql_query(sql)
+
+    result = {"open_bugs": 0, "critical_bugs": 0}
+
+    if results:
+        r = results[0]
+        result["open_bugs"] = int(r.get("open_bugs", 0) or 0)
+        result["critical_bugs"] = int(r.get("critical_bugs", 0) or 0)
+        total = int(r.get("total_bugs", 0) or 0)
+        resolved = int(r.get("resolved_bugs", 0) or 0)
+        if total > 0:
+            result["resolution_rate"] = round((resolved / total) * 100, 1)
+
+    return result
+
+
+async def _get_executive_velocity_metrics(start_date: str, end_date: str) -> dict:
+    """Get velocity metrics for executive dashboard."""
+    velocity_sql = f"""
+    SELECT
+        COALESCE(SUM(CASE WHEN js.name = 'Done' THEN i.story_points ELSE 0 END), 0) as completed_points,
+        COALESCE(SUM(CASE WHEN js.name NOT IN ('Done', 'Closed') AND i.story_points > 0 THEN i.story_points ELSE 0 END), 0) as in_progress_points,
+        COUNT(CASE WHEN i.resolution_date IS NOT NULL THEN 1 END) as tickets_completed,
+        AVG(CASE WHEN i.resolution_date IS NOT NULL THEN i.cycle_time END) as avg_cycle_seconds
+    FROM jira_issues i
+    JOIN jira_users ju ON i.user_id = ju.id
+    JOIN dx_users du ON du.email = ju.email
+    JOIN dx_teams dt ON du.team_id = dt.id
+    LEFT JOIN jira_statuses js ON i.status_id = js.id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND i.deleted_at IS NULL
+      AND (
+        (i.resolution_date >= '{start_date}' AND i.resolution_date < '{end_date}')
+        OR (i.resolution_date IS NULL AND i.created_at < '{end_date}')
+      )
+    """
+
+    results = await _run_sql_query(velocity_sql)
+
+    result = {}
+    if results:
+        r = results[0]
+        result["completed_points"] = float(r.get("completed_points", 0) or 0)
+        result["in_progress_points"] = float(r.get("in_progress_points", 0) or 0)
+        result["tickets_completed"] = int(r.get("tickets_completed", 0) or 0)
+        if r.get("avg_cycle_seconds"):
+            result["avg_cycle_time_hours"] = round(float(r["avg_cycle_seconds"]) / 3600, 1)
+
+    return result
+
+
+async def _get_executive_pr_metrics(start_date: str, end_date: str) -> dict:
+    """Get PR metrics for executive dashboard."""
+    pr_sql = f"""
+    SELECT
+        COUNT(*) as total_prs,
+        SUM(CASE WHEN pr.merged IS NOT NULL THEN 1 ELSE 0 END) as merged_prs,
+        AVG(CASE WHEN pr.merged IS NOT NULL THEN pr.open_to_merge END) as avg_merge_seconds
+    FROM pull_requests pr
+    JOIN dx_users du ON pr.dx_user_id = du.id
+    JOIN dx_teams dt ON du.team_id = dt.id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND pr.created >= '{start_date}'
+      AND pr.created < '{end_date}'
+      AND pr.bot_authored = false
+    """
+
+    review_sql = f"""
+    SELECT COUNT(*) as total_reviews
+    FROM pull_request_reviews prr
+    JOIN dx_users du ON prr.dx_user_id = du.id
+    JOIN dx_teams dt ON du.team_id = dt.id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND prr.created >= '{start_date}'
+      AND prr.created < '{end_date}'
+      AND prr.bot_authored = false
+    """
+
+    pr_results, review_results = await asyncio.gather(
+        _run_sql_query(pr_sql),
+        _run_sql_query(review_sql)
+    )
+
+    result = {}
+    if pr_results:
+        r = pr_results[0]
+        result["prs_opened"] = int(r.get("total_prs", 0) or 0)
+        result["prs_merged"] = int(r.get("merged_prs", 0) or 0)
+        if r.get("avg_merge_seconds"):
+            result["avg_pr_merge_time_hours"] = round(float(r["avg_merge_seconds"]) / 3600, 1)
+
+    if review_results:
+        result["total_reviews"] = int(review_results[0].get("total_reviews", 0) or 0)
+
+    return result
+
+
+async def _get_executive_defect_trend(start_date: str, end_date: str) -> list[dict]:
+    """Get weekly defect trend."""
+    sql = f"""
+    SELECT
+        DATE_TRUNC('week', i.created_at)::date as week,
+        COUNT(*) as created,
+        SUM(CASE WHEN i.resolution_date IS NOT NULL
+            AND DATE_TRUNC('week', i.resolution_date) = DATE_TRUNC('week', i.created_at)
+            THEN 1 ELSE 0 END) as resolved_same_week
+    FROM jira_issues i
+    JOIN jira_issue_types it ON i.issue_type_id = it.id
+    JOIN jira_users ju ON i.user_id = ju.id
+    JOIN dx_users du ON du.email = ju.email
+    JOIN dx_teams dt ON du.team_id = dt.id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND it.name IN ('Bug', 'Defect')
+      AND i.created_at >= '{start_date}'
+      AND i.created_at < '{end_date}'
+      AND i.deleted_at IS NULL
+    GROUP BY DATE_TRUNC('week', i.created_at)
+    ORDER BY week
+    """
+
+    results = await _run_sql_query(sql)
+    return [
+        {
+            "week": str(r.get("week", ""))[:10],
+            "created": int(r.get("created", 0) or 0),
+            "resolved": int(r.get("resolved_same_week", 0) or 0)
+        }
+        for r in results
+    ]
+
+
+async def _get_executive_pr_trend(start_date: str, end_date: str) -> list[dict]:
+    """Get weekly PR trend."""
+    sql = f"""
+    SELECT
+        DATE_TRUNC('week', pr.created)::date as week,
+        COUNT(*) as opened,
+        SUM(CASE WHEN pr.merged IS NOT NULL THEN 1 ELSE 0 END) as merged
+    FROM pull_requests pr
+    JOIN dx_users du ON pr.dx_user_id = du.id
+    JOIN dx_teams dt ON du.team_id = dt.id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND pr.created >= '{start_date}'
+      AND pr.created < '{end_date}'
+      AND pr.bot_authored = false
+    GROUP BY DATE_TRUNC('week', pr.created)
+    ORDER BY week
+    """
+
+    results = await _run_sql_query(sql)
+    return [
+        {
+            "week": str(r.get("week", ""))[:10],
+            "opened": int(r.get("opened", 0) or 0),
+            "merged": int(r.get("merged", 0) or 0)
+        }
+        for r in results
+    ]
+
+
+async def _get_executive_velocity_trend(start_date: str, end_date: str) -> list[dict]:
+    """Get weekly velocity trend (story points completed)."""
+    sql = f"""
+    SELECT
+        DATE_TRUNC('week', i.resolution_date)::date as week,
+        COALESCE(SUM(i.story_points), 0) as completed_points,
+        COUNT(*) as tickets_completed
+    FROM jira_issues i
+    JOIN jira_users ju ON i.user_id = ju.id
+    JOIN dx_users du ON du.email = ju.email
+    JOIN dx_teams dt ON du.team_id = dt.id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND i.resolution_date >= '{start_date}'
+      AND i.resolution_date < '{end_date}'
+      AND i.deleted_at IS NULL
+    GROUP BY DATE_TRUNC('week', i.resolution_date)
+    ORDER BY week
+    """
+
+    results = await _run_sql_query(sql)
+    return [
+        {
+            "week": str(r.get("week", ""))[:10],
+            "completed_points": float(r.get("completed_points", 0) or 0),
+            "tickets_completed": int(r.get("tickets_completed", 0) or 0)
+        }
+        for r in results
+    ]
+
+
+async def _get_executive_team_contributions(start_date: str, end_date: str) -> list[dict]:
+    """Get team contributions breakdown."""
+    sql = f"""
+    SELECT
+        du.name as user_name,
+        COUNT(*) as prs_opened,
+        SUM(CASE WHEN pr.merged IS NOT NULL THEN 1 ELSE 0 END) as prs_merged
+    FROM pull_requests pr
+    JOIN dx_users du ON pr.dx_user_id = du.id
+    JOIN dx_teams dt ON du.team_id = dt.id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND pr.created >= '{start_date}'
+      AND pr.created < '{end_date}'
+      AND pr.bot_authored = false
+    GROUP BY du.name
+    HAVING COUNT(*) > 0
+    ORDER BY prs_merged DESC, prs_opened DESC
+    """
+
+    results = await _run_sql_query(sql)
+    return [
+        {
+            "user_name": r.get("user_name", "Unknown"),
+            "prs_opened": int(r.get("prs_opened", 0) or 0),
+            "prs_merged": int(r.get("prs_merged", 0) or 0)
+        }
+        for r in results
+    ]
+
+
+async def _get_executive_story_points_by_member(start_date: str, end_date: str) -> list[dict]:
+    """Get story points breakdown by member."""
+    sql = f"""
+    SELECT
+        du.name as user_name,
+        COALESCE(SUM(CASE WHEN js.name = 'Done' THEN i.story_points ELSE 0 END), 0) as completed_points,
+        COALESCE(SUM(CASE WHEN js.name NOT IN ('Done', 'Closed') THEN i.story_points ELSE 0 END), 0) as in_progress_points,
+        COUNT(*) as total_issues,
+        COUNT(CASE WHEN i.resolution_date IS NOT NULL THEN 1 END) as issues_completed
+    FROM jira_issues i
+    JOIN jira_users ju ON i.user_id = ju.id
+    JOIN dx_users du ON du.email = ju.email
+    JOIN dx_teams dt ON du.team_id = dt.id
+    LEFT JOIN jira_statuses js ON i.status_id = js.id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND i.deleted_at IS NULL
+      AND (
+        i.created_at >= '{start_date}' AND i.created_at < '{end_date}'
+        OR i.resolution_date >= '{start_date}' AND i.resolution_date < '{end_date}'
+      )
+    GROUP BY du.name
+    HAVING SUM(i.story_points) > 0 OR COUNT(*) > 0
+    ORDER BY completed_points DESC
+    """
+
+    results = await _run_sql_query(sql)
+    return [
+        {
+            "user_name": r.get("user_name", "Unknown"),
+            "completed_points": float(r.get("completed_points", 0) or 0),
+            "in_progress_points": float(r.get("in_progress_points", 0) or 0),
+            "total_issues": int(r.get("total_issues", 0) or 0),
+            "issues_completed": int(r.get("issues_completed", 0) or 0)
+        }
+        for r in results
+    ]
+
+
+async def _get_executive_review_trend(start_date: str, end_date: str) -> list[dict]:
+    """Get weekly review trend."""
+    sql = f"""
+    SELECT
+        DATE_TRUNC('week', prr.created)::date as week,
+        COUNT(*) as reviews
+    FROM pull_request_reviews prr
+    JOIN dx_users du ON prr.dx_user_id = du.id
+    JOIN dx_teams dt ON du.team_id = dt.id
+    WHERE dt.source_id = '{QA_TEAM_ID}'
+      AND prr.created >= '{start_date}'
+      AND prr.created < '{end_date}'
+      AND prr.bot_authored = false
+    GROUP BY DATE_TRUNC('week', prr.created)
+    ORDER BY week
+    """
+
+    results = await _run_sql_query(sql)
+    return [
+        {
+            "week": str(r.get("week", ""))[:10],
+            "reviews": int(r.get("reviews", 0) or 0)
+        }
+        for r in results
+    ]
+
+
+async def _get_executive_top_reviewers(start_date: str, end_date: str) -> list[dict]:
+    """Get top reviewers with breakdown - same query pattern as _get_pr_review_stats but sorted by reviews."""
+    sql = f"""
+    WITH qa_users AS (
+      SELECT du.id AS dx_user_id, du.name, du.email
+      FROM dx_users du
+      JOIN dx_teams dt ON du.team_id = dt.id
+      WHERE dt.source_id = '{QA_TEAM_ID}'
+        AND du.deleted_at IS NULL
+    ),
+    reviews AS (
+      SELECT prr.dx_user_id,
+        COUNT(DISTINCT prr.pull_request_id) AS reviews_done,
+        SUM(prr.comment_count) AS total_comments
+      FROM pull_request_reviews prr
+      WHERE prr.created >= '{start_date}' AND prr.created < '{end_date}'
+        AND prr.dx_user_id IN (SELECT dx_user_id FROM qa_users)
+        AND prr.bot_authored = false
+      GROUP BY prr.dx_user_id
+    )
+    SELECT
+      qu.name AS user_name,
+      COALESCE(r.reviews_done, 0) AS reviews_given,
+      COALESCE(r.total_comments, 0) AS comments
+    FROM qa_users qu
+    LEFT JOIN reviews r ON qu.dx_user_id = r.dx_user_id
+    WHERE COALESCE(r.reviews_done, 0) > 0
+    ORDER BY reviews_given DESC
+    """
+
+    results = await _run_sql_query(sql)
+    return [
+        {
+            "user_name": r.get("user_name", "Unknown"),
+            "reviews_given": int(r.get("reviews_given", 0) or 0),
+            "approvals": 0,
+            "changes_requested": 0,
+            "comments": int(r.get("comments", 0) or 0)
+        }
+        for r in results
+    ]
+
+
+async def get_executive_dashboard_metrics(quarter: str) -> ExecutiveMetrics:
+    """Get all executive dashboard metrics from DX Data Cloud."""
+    start_date, end_date = _get_quarter_date_range(quarter)
+
+    # Run all queries in parallel
+    results = await asyncio.gather(
+        _get_executive_bug_metrics(start_date, end_date),
+        _get_executive_velocity_metrics(start_date, end_date),
+        _get_executive_pr_metrics(start_date, end_date),
+        _get_executive_defect_trend(start_date, end_date),
+        _get_executive_pr_trend(start_date, end_date),
+        _get_executive_velocity_trend(start_date, end_date),
+        _get_executive_team_contributions(start_date, end_date),
+        _get_executive_story_points_by_member(start_date, end_date),
+        _get_executive_review_trend(start_date, end_date),
+        _get_executive_top_reviewers(start_date, end_date),
+        return_exceptions=True
+    )
+
+    bug_metrics = results[0] if not isinstance(results[0], Exception) else {}
+    velocity_metrics = results[1] if not isinstance(results[1], Exception) else {}
+    pr_metrics = results[2] if not isinstance(results[2], Exception) else {}
+    defect_trend = results[3] if not isinstance(results[3], Exception) else []
+    pr_trend = results[4] if not isinstance(results[4], Exception) else []
+    velocity_trend = results[5] if not isinstance(results[5], Exception) else []
+    team_contributions = results[6] if not isinstance(results[6], Exception) else []
+    story_points_by_member = results[7] if not isinstance(results[7], Exception) else []
+    review_trend = results[8] if not isinstance(results[8], Exception) else []
+    top_reviewers = results[9] if not isinstance(results[9], Exception) else []
+
+    return ExecutiveMetrics(
+        # Quality
+        open_bugs=bug_metrics.get("open_bugs", 0),
+        critical_bugs=bug_metrics.get("critical_bugs", 0),
+        bug_resolution_rate=bug_metrics.get("resolution_rate"),
+        defect_density=None,  # Calculated elsewhere if needed
+
+        # Velocity
+        story_points_completed=velocity_metrics.get("completed_points", 0),
+        story_points_in_progress=velocity_metrics.get("in_progress_points", 0),
+        tickets_completed=velocity_metrics.get("tickets_completed", 0),
+        avg_cycle_time_hours=velocity_metrics.get("avg_cycle_time_hours"),
+
+        # PR & Reviews
+        prs_merged=pr_metrics.get("prs_merged", 0),
+        prs_opened=pr_metrics.get("prs_opened", 0),
+        total_reviews=pr_metrics.get("total_reviews", 0),
+        avg_pr_merge_time_hours=pr_metrics.get("avg_pr_merge_time_hours"),
+
+        # Trends
+        defect_trend=defect_trend,
+        pr_trend=pr_trend,
+        velocity_trend=velocity_trend,
+        review_trend=review_trend,
+
+        # Breakdowns
+        team_contributions=team_contributions,
+        story_points_by_member=story_points_by_member,
+        top_reviewers=top_reviewers
+    )

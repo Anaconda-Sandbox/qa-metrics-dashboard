@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { ThemeProvider } from "./context/ThemeContext";
+import ThemeToggle from "./components/ThemeToggle";
 import ViewToggle from "./components/ViewToggle";
 import ProjectSelector from "./components/ProjectSelector";
 import QuarterSelector, { getCurrentQuarter, getQuarterOptions } from "./components/QuarterSelector";
 import IndividualView from "./components/IndividualView";
-import ProfessionalDashboard from "./components/ProfessionalDashboard";
+import ExecutiveDashboard from "./components/ExecutiveDashboard";
 import DXDashboard from "./components/DXDashboard";
 
 export default function App() {
@@ -30,6 +32,7 @@ export default function App() {
   };
 
   return (
+    <ThemeProvider>
     <div className="min-h-screen bg-[var(--bg-base)] text-[var(--text-secondary)]">
       {/* Header */}
       <header className="sticky top-0 z-50 glass border-b border-[var(--border-subtle)]">
@@ -115,6 +118,7 @@ export default function App() {
                 <span>Live data</span>
               </div>
 
+              <ThemeToggle />
               <ViewToggle view={view} onToggle={setView} />
             </div>
           </div>
@@ -124,8 +128,7 @@ export default function App() {
       {/* Main Content */}
       <main className="max-w-[1800px] mx-auto px-6 py-8">
         {view === "dashboard" ? (
-          <ProfessionalDashboard
-            project={proj}
+          <ExecutiveDashboard
             quarter={quarter}
             compareQuarter={isComparing ? compareQuarter : null}
             onExitCompare={() => {
@@ -172,5 +175,6 @@ export default function App() {
         </div>
       </footer>
     </div>
+    </ThemeProvider>
   );
 }

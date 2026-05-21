@@ -162,6 +162,85 @@ class DXTeamScore(Base):
     )
 
 
+class DXDORAMetrics(Base):
+    """Stores DORA metrics per quarter (cached)."""
+    __tablename__ = "dx_dora_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    quarter = Column(String(10), nullable=False, unique=True, index=True)
+    deployment_frequency = Column(Float, nullable=True)
+    lead_time_for_changes = Column(Float, nullable=True)
+    mean_time_to_recovery = Column(Float, nullable=True)
+    change_failure_rate = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DXTeamInfo(Base):
+    """Stores team info (cached)."""
+    __tablename__ = "dx_team_info"
+
+    id = Column(Integer, primary_key=True, index=True)
+    team_id = Column(String(50), nullable=False, unique=True, index=True)
+    name = Column(String(100), nullable=False)
+    manager_name = Column(String(100), nullable=True)
+    manager_email = Column(String(200), nullable=True)
+    contributor_count = Column(Integer, default=0)
+    members = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DXBenchmarks(Base):
+    """Stores org benchmarks per snapshot (cached)."""
+    __tablename__ = "dx_benchmarks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    snapshot_id = Column(String(50), nullable=False, unique=True, index=True)
+    benchmarks = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DXQACloudMetrics(Base):
+    """Stores QA metrics from DX Data Cloud (cached for fast retrieval)."""
+    __tablename__ = "dx_qa_cloud_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    quarter = Column(String(10), nullable=False, unique=True, index=True)
+
+    # Quality metrics
+    defect_density = Column(Float, nullable=True)
+    bug_count_by_priority = Column(JSON, nullable=True)
+    bug_resolution_rate = Column(Float, nullable=True)
+    reopen_rate = Column(Float, nullable=True)
+
+    # Velocity metrics
+    tickets_completed = Column(Integer, default=0)
+    cycle_time_avg_hours = Column(Float, nullable=True)
+    sprint_completion_rate = Column(Float, nullable=True)
+    backlog_size = Column(Integer, default=0)
+
+    # Pipeline metrics
+    pipeline_pass_rate = Column(Float, nullable=True)
+    pipeline_fail_rate = Column(Float, nullable=True)
+    total_pipeline_runs = Column(Integer, default=0)
+    avg_pipeline_duration_minutes = Column(Float, nullable=True)
+
+    # AI Adoption
+    copilot_active_users = Column(Integer, default=0)
+    copilot_acceptance_rate = Column(Float, nullable=True)
+    copilot_loc_suggested = Column(Integer, default=0)
+    copilot_loc_accepted = Column(Integer, default=0)
+    cursor_active_users = Column(Integer, default=0)
+    ai_tool_usage = Column(JSON, nullable=True)
+    pr_review_stats = Column(JSON, nullable=True)
+    defect_density_by_project = Column(JSON, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 def init_db():
     """Create all tables."""
     Base.metadata.create_all(bind=engine)

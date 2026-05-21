@@ -1,0 +1,659 @@
+import { useState, useEffect, useMemo } from "react";
+import {
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  Cell,
+} from "recharts";
+
+const API_BASE = import.meta.env.VITE_API_URL || "";
+
+interface ExecutiveMetrics {
+  open_bugs: number;
+  critical_bugs: number;
+  bug_resolution_rate: number | null;
+  defect_density: number | null;
+  story_points_completed: number;
+  story_points_in_progress: number;
+  tickets_completed: number;
+  avg_cycle_time_hours: number | null;
+  prs_merged: number;
+  prs_opened: number;
+  total_reviews: number;
+  avg_pr_merge_time_hours: number | null;
+  defect_trend: Array<{ week: string; created: number; resolved: number }>;
+  pr_trend: Array<{ week: string; opened: number; merged: number }>;
+  velocity_trend: Array<{ week: string; completed_points: number; tickets_completed: number }>;
+  review_trend: Array<{ week: string; reviews: number }>;
+  team_contributions: Array<{ user_name: string; prs_opened: number; prs_merged: number }>;
+  story_points_by_member: Array<{
+    user_name: string;
+    completed_points: number;
+    in_progress_points: number;
+    total_issues: number;
+    issues_completed: number;
+  }>;
+  top_reviewers: Array<{
+    user_name: string;
+    reviews_given: number;
+    approvals: number;
+    changes_requested: number;
+    comments: number;
+  }>;
+}
+
+interface Props {
+  quarter: string;
+  compareQuarter: string | null;
+  onExitCompare?: () => void;
+}
+
+const tooltipStyle = {
+  contentStyle: {
+    backgroundColor: "rgba(15, 20, 25, 0.95)",
+    border: "1px solid rgba(71, 85, 105, 0.3)",
+    borderRadius: "12px",
+    padding: "12px 16px",
+    boxShadow: "0 10px 40px rgba(0,0,0,0.5)",
+  },
+  labelStyle: { color: "#F1F5F9", fontWeight: 600, marginBottom: "8px" },
+};
+
+function KPICard({
+  title,
+  value,
+  suffix = "",
+  description,
+  trend,
+  trendInverted = false,
+  color = "primary",
+  loading = false,
+}: {
+  title: string;
+  value: number | string;
+  suffix?: string;
+  description?: string;
+  trend?: number;
+  trendInverted?: boolean;
+  color?: "primary" | "success" | "warning" | "error" | "info";
+  loading?: boolean;
+}) {
+  const colorMap = {
+    primary: { bg: "var(--accent-primary)", subtle: "rgba(99, 102, 241, 0.1)" },
+    success: { bg: "var(--success-base)", subtle: "var(--success-subtle)" },
+    warning: { bg: "var(--warning-base)", subtle: "var(--warning-subtle)" },
+    error: { bg: "var(--error-base)", subtle: "var(--error-subtle)" },
+    info: { bg: "var(--info-base)", subtle: "var(--info-subtle)" },
+  };
+
+  const colors = colorMap[color];
+
+  if (loading) {
+    return (
+      <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-5">
+        <div className="skeleton h-4 w-20 rounded mb-3" />
+        <div className="skeleton h-8 w-16 rounded mb-2" />
+        <div className="skeleton h-3 w-24 rounded" />
+      </div>
+    );
+  }
+
+  const isPositive = trendInverted ? (trend ?? 0) < 0 : (trend ?? 0) > 0;
+
+  return (
+    <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-5 transition-all duration-200 hover:border-[var(--border-emphasis)] hover:shadow-lg">
+      <div className="flex items-start justify-between mb-3">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+          {title}
+        </span>
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-3xl font-bold tracking-tight" style={{ color: colors.bg }}>
+          {value}{suffix}
+        </span>
+        {trend !== undefined && trend !== null && (
+          <span className={`flex items-center gap-1 text-xs font-semibold ${isPositive ? "text-[var(--success-base)]" : "text-[var(--error-base)]"}`}>
+            {trend > 0 ? "+" : ""}{trend.toFixed(1)}%
+            <svg className={`w-3 h-3 ${!isPositive ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+            </svg>
+          </span>
+        )}
+      </div>
+      {description && <p className="mt-2 text-xs text-[var(--text-muted)]">{description}</p>}
+    </div>
+  );
+}
+
+function SectionHeader({ title, subtitle, badge }: { title: string; subtitle?: string; badge?: string }) {
+  return (
+    <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center gap-3">
+        <h2 className="text-lg font-semibold text-[var(--text-primary)] tracking-tight">{title}</h2>
+        {badge && (
+          <span className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider rounded-full bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20">
+            {badge}
+          </span>
+        )}
+      </div>
+      {subtitle && <p className="text-sm text-[var(--text-muted)]">{subtitle}</p>}
+    </div>
+  );
+}
+
+function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={`rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-6 ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+export default function ExecutiveDashboard({ quarter, compareQuarter, onExitCompare }: Props) {
+  const [data, setData] = useState<ExecutiveMetrics | null>(null);
+  const [compareData, setCompareData] = useState<ExecutiveMetrics | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const isComparing = !!compareQuarter;
+
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetch(`${API_BASE}/api/dx/executive?quarter=${quarter}`);
+        if (!response.ok) throw new Error("Failed to fetch executive metrics");
+        const result = await response.json();
+        setData(result);
+
+        if (compareQuarter) {
+          const compareResponse = await fetch(`${API_BASE}/api/dx/executive?quarter=${compareQuarter}`);
+          if (compareResponse.ok) {
+            setCompareData(await compareResponse.json());
+          }
+        } else {
+          setCompareData(null);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unknown error");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, [quarter, compareQuarter]);
+
+  const calculateTrend = (current: number, previous: number | undefined) => {
+    if (!previous || previous === 0) return undefined;
+    return ((current - previous) / previous) * 100;
+  };
+
+  const defectTrendData = useMemo(() => {
+    if (!data?.defect_trend) return [];
+    return data.defect_trend.map((d) => ({
+      week: d.week.slice(5),
+      Created: d.created,
+      Resolved: d.resolved,
+    }));
+  }, [data]);
+
+  const prTrendData = useMemo(() => {
+    if (!data?.pr_trend) return [];
+    return data.pr_trend.map((d) => ({
+      week: d.week.slice(5),
+      Opened: d.opened,
+      Merged: d.merged,
+    }));
+  }, [data]);
+
+  const velocityTrendData = useMemo(() => {
+    if (!data?.velocity_trend) return [];
+    return data.velocity_trend.map((d) => ({
+      week: d.week.slice(5),
+      Points: d.completed_points,
+      Tickets: d.tickets_completed,
+    }));
+  }, [data]);
+
+  const reviewTrendData = useMemo(() => {
+    if (!data?.review_trend) return [];
+    return data.review_trend.map((d) => ({
+      week: d.week.slice(5),
+      Reviews: d.reviews,
+    }));
+  }, [data]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-32">
+        <div className="text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-[var(--accent-primary)] to-[var(--accent-secondary)] flex items-center justify-center animate-pulse">
+            <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          </div>
+          <p className="text-[var(--text-muted)]">Loading executive metrics from DX Data Cloud...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="card p-8 text-center">
+        <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-[var(--error-subtle)] flex items-center justify-center">
+          <svg className="w-8 h-8 text-[var(--error-base)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </div>
+        <p className="text-[var(--error-base)] font-medium">{error}</p>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const periodLabel = quarter.replace("-", " ");
+
+  return (
+    <div className="space-y-8 animate-fade-in">
+      {/* Comparison Banner */}
+      {isComparing && (
+        <div className="rounded-xl bg-gradient-to-r from-[var(--accent-primary)]/10 to-[var(--accent-secondary)]/10 border border-[var(--accent-primary)]/20 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-[var(--accent-primary)]/20">
+                <svg className="w-5 h-5 text-[var(--accent-primary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-[var(--text-primary)]">
+                  Comparing <span className="text-[var(--accent-primary)]">{periodLabel}</span> vs{" "}
+                  <span className="text-[var(--text-tertiary)]">{compareQuarter?.replace("-", " ")}</span>
+                </p>
+                <p className="text-xs text-[var(--text-muted)]">Data sourced from DX Data Cloud</p>
+              </div>
+            </div>
+            {onExitCompare && (
+              <button
+                onClick={onExitCompare}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--bg-surface)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-overlay)] transition-all"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Exit Compare
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Data Source Badge */}
+      <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+        <div className="w-2 h-2 rounded-full bg-[var(--accent-primary)] animate-pulse" />
+        <span>Data from DX Data Cloud</span>
+        <span className="text-[var(--border-subtle)]">|</span>
+        <span>{periodLabel}</span>
+      </div>
+
+      {/* Executive KPIs */}
+      <section>
+        <SectionHeader title="Executive Summary" subtitle={periodLabel} />
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+          <KPICard
+            title="Open Bugs"
+            value={data.open_bugs}
+            description={`${data.critical_bugs} critical`}
+            trend={isComparing ? calculateTrend(data.open_bugs, compareData?.open_bugs) : undefined}
+            trendInverted={true}
+            color={data.open_bugs > 20 ? "error" : data.open_bugs > 10 ? "warning" : "success"}
+          />
+          <KPICard
+            title="Resolution Rate"
+            value={data.bug_resolution_rate ?? 0}
+            suffix="%"
+            description="Bugs resolved"
+            trend={isComparing ? calculateTrend(data.bug_resolution_rate ?? 0, compareData?.bug_resolution_rate ?? undefined) : undefined}
+            color={(data.bug_resolution_rate ?? 0) >= 80 ? "success" : (data.bug_resolution_rate ?? 0) >= 60 ? "warning" : "error"}
+          />
+          <KPICard
+            title="Cycle Time"
+            value={data.avg_cycle_time_hours ? Math.round(data.avg_cycle_time_hours) : 0}
+            suffix="h"
+            description="Avg resolution"
+            trend={isComparing ? calculateTrend(data.avg_cycle_time_hours ?? 0, compareData?.avg_cycle_time_hours ?? undefined) : undefined}
+            trendInverted={true}
+            color="info"
+          />
+          <KPICard
+            title="PRs Merged"
+            value={data.prs_merged}
+            description={periodLabel}
+            trend={isComparing ? calculateTrend(data.prs_merged, compareData?.prs_merged) : undefined}
+            color="info"
+          />
+          <KPICard
+            title="PRs Opened"
+            value={data.prs_opened}
+            description={periodLabel}
+            trend={isComparing ? calculateTrend(data.prs_opened, compareData?.prs_opened) : undefined}
+            color="info"
+          />
+          <KPICard
+            title="Story Points"
+            value={data.story_points_completed}
+            description={`${data.story_points_in_progress} in progress`}
+            trend={isComparing ? calculateTrend(data.story_points_completed, compareData?.story_points_completed) : undefined}
+            color="primary"
+          />
+          <KPICard
+            title="Reviews"
+            value={data.total_reviews}
+            description={periodLabel}
+            trend={isComparing ? calculateTrend(data.total_reviews, compareData?.total_reviews) : undefined}
+            color="success"
+          />
+          <KPICard
+            title="Tickets Done"
+            value={data.tickets_completed}
+            description={periodLabel}
+            trend={isComparing ? calculateTrend(data.tickets_completed, compareData?.tickets_completed) : undefined}
+            color="success"
+          />
+        </div>
+      </section>
+
+      {/* Velocity Section */}
+      <section>
+        <SectionHeader title="Velocity & Delivery" badge="Quarterly" />
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          <div className="lg:col-span-1 space-y-4">
+            <Card className="text-center">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">Completed</p>
+              <p className="text-4xl font-bold text-[var(--success-base)]">{data.story_points_completed}</p>
+              <p className="text-xs text-[var(--text-muted)] mt-1">story points</p>
+            </Card>
+            <Card className="text-center">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">In Progress</p>
+              <p className="text-4xl font-bold text-[var(--warning-base)]">{data.story_points_in_progress}</p>
+              <p className="text-xs text-[var(--text-muted)] mt-1">story points</p>
+            </Card>
+            <Card className="text-center">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">Avg Merge Time</p>
+              <p className="text-4xl font-bold text-[var(--info-base)]">{data.avg_pr_merge_time_hours ? Math.round(data.avg_pr_merge_time_hours) : 0}</p>
+              <p className="text-xs text-[var(--text-muted)] mt-1">hours</p>
+            </Card>
+          </div>
+
+          <Card className="lg:col-span-4">
+            <div className="mb-4">
+              <h3 className="text-base font-semibold text-[var(--text-primary)]">Weekly Velocity Trend</h3>
+              <p className="text-xs text-[var(--text-muted)] mt-1">Story points completed per week</p>
+            </div>
+            {velocityTrendData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={280}>
+                <ComposedChart data={velocityTrendData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                  <XAxis dataKey="week" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                  <YAxis yAxisId="left" stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="right" orientation="right" stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Legend wrapperStyle={{ fontSize: "12px" }} />
+                  <Bar yAxisId="left" dataKey="Points" fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="Tickets" stroke="var(--chart-4)" strokeWidth={2} dot={{ r: 3 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-[280px] text-[var(--text-muted)]">No velocity data available</div>
+            )}
+          </Card>
+        </div>
+
+        {/* Story Points by Member */}
+        {data.story_points_by_member.length > 0 && (
+          <Card className="mt-6">
+            <div className="mb-4">
+              <h3 className="text-base font-semibold text-[var(--text-primary)]">Story Points by Team Member</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border-subtle)]">
+                    <th className="text-left py-3 px-4 text-[var(--text-muted)] font-medium">Member</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Completed</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">In Progress</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Total Issues</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Issues Done</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.story_points_by_member.map((m) => (
+                    <tr key={m.user_name} className="border-b border-[var(--border-subtle)]/40 hover:bg-[var(--bg-surface)]/50 transition-colors">
+                      <td className="py-3 px-4 font-medium text-[var(--text-primary)]">{m.user_name}</td>
+                      <td className="text-center py-3 px-4 text-[var(--success-base)] font-semibold">{m.completed_points}</td>
+                      <td className="text-center py-3 px-4 text-[var(--warning-base)]">{m.in_progress_points}</td>
+                      <td className="text-center py-3 px-4 text-[var(--text-tertiary)]">{m.total_issues}</td>
+                      <td className="text-center py-3 px-4 text-[var(--info-base)]">{m.issues_completed}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </section>
+
+      {/* Quality & Defects */}
+      <section>
+        <SectionHeader title="Quality Metrics" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card>
+            <div className="mb-4">
+              <h3 className="text-base font-semibold text-[var(--text-primary)]">Defect Trend</h3>
+              <p className="text-xs text-[var(--text-muted)] mt-1">Bugs created vs resolved per week</p>
+            </div>
+            {defectTrendData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={250}>
+                <AreaChart data={defectTrendData}>
+                  <defs>
+                    <linearGradient id="colorCreated" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--error-base)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="var(--error-base)" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="colorResolved" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--success-base)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="var(--success-base)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                  <XAxis dataKey="week" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                  <YAxis stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Legend wrapperStyle={{ fontSize: "12px" }} />
+                  <Area type="monotone" dataKey="Created" stroke="var(--error-base)" strokeWidth={2} fill="url(#colorCreated)" dot={{ r: 3 }} />
+                  <Area type="monotone" dataKey="Resolved" stroke="var(--success-base)" strokeWidth={2} fill="url(#colorResolved)" dot={{ r: 3 }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-[250px] text-[var(--text-muted)]">No defect trend data</div>
+            )}
+          </Card>
+
+          <Card>
+            <div className="mb-4">
+              <h3 className="text-base font-semibold text-[var(--text-primary)]">PR Activity Trend</h3>
+              <p className="text-xs text-[var(--text-muted)] mt-1">Pull requests opened and merged per week</p>
+            </div>
+            {prTrendData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={250}>
+                <AreaChart data={prTrendData}>
+                  <defs>
+                    <linearGradient id="colorOpened" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--chart-1)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="var(--chart-1)" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="colorMerged" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--chart-2)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="var(--chart-2)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                  <XAxis dataKey="week" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                  <YAxis stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Legend wrapperStyle={{ fontSize: "12px" }} />
+                  <Area type="monotone" dataKey="Opened" stroke="var(--chart-1)" strokeWidth={2} fill="url(#colorOpened)" dot={{ r: 3 }} />
+                  <Area type="monotone" dataKey="Merged" stroke="var(--chart-2)" strokeWidth={2} fill="url(#colorMerged)" dot={{ r: 3 }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-[250px] text-[var(--text-muted)]">No PR trend data</div>
+            )}
+          </Card>
+        </div>
+      </section>
+
+      {/* PR & Review Activity */}
+      <section>
+        <SectionHeader title="PR & Review Activity" badge="Team" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Team Contributions */}
+          {data.team_contributions.length > 0 && (
+            <Card>
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-[var(--text-primary)]">PR Contributions</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-1">{data.team_contributions.length} active members</p>
+              </div>
+              <ResponsiveContainer width="100%" height={Math.max(250, data.team_contributions.length * 35)}>
+                <BarChart data={data.team_contributions} layout="vertical" margin={{ left: 10, right: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
+                  <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                  <YAxis type="category" dataKey="user_name" stroke="var(--text-muted)" fontSize={11} width={120} tickLine={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Legend wrapperStyle={{ fontSize: "12px" }} />
+                  <Bar dataKey="prs_opened" name="Opened" fill="var(--chart-1)" radius={[0, 4, 4, 0]} />
+                  <Bar dataKey="prs_merged" name="Merged" fill="var(--chart-2)" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
+
+          {/* Review Trend */}
+          <Card>
+            <div className="mb-4">
+              <h3 className="text-base font-semibold text-[var(--text-primary)]">Review Activity Trend</h3>
+              <p className="text-xs text-[var(--text-muted)] mt-1">Code reviews completed per week</p>
+            </div>
+            {reviewTrendData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={250}>
+                <AreaChart data={reviewTrendData}>
+                  <defs>
+                    <linearGradient id="colorReviews" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--chart-4)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="var(--chart-4)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                  <XAxis dataKey="week" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                  <YAxis stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Legend wrapperStyle={{ fontSize: "12px" }} />
+                  <Area type="monotone" dataKey="Reviews" stroke="var(--chart-4)" strokeWidth={2} fill="url(#colorReviews)" dot={{ r: 3 }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-[250px] text-[var(--text-muted)]">No review trend data</div>
+            )}
+          </Card>
+        </div>
+
+        {/* Top Reviewers Table */}
+        {data.top_reviewers.length > 0 && (
+          <Card className="mt-6">
+            <div className="mb-4">
+              <h3 className="text-base font-semibold text-[var(--text-primary)]">Top Reviewers</h3>
+              <p className="text-xs text-[var(--text-muted)] mt-1">Code review activity breakdown</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border-subtle)]">
+                    <th className="text-left py-3 px-4 text-[var(--text-muted)] font-medium">Reviewer</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Total</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Approved</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Changes</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Comments</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.top_reviewers.map((r) => (
+                    <tr key={r.user_name} className="border-b border-[var(--border-subtle)]/40 hover:bg-[var(--bg-surface)]/50 transition-colors">
+                      <td className="py-3 px-4 font-medium text-[var(--text-primary)]">{r.user_name}</td>
+                      <td className="text-center py-3 px-4 text-[var(--info-base)] font-semibold">{r.reviews_given}</td>
+                      <td className="text-center py-3 px-4 text-[var(--success-base)]">{r.approvals}</td>
+                      <td className="text-center py-3 px-4 text-[var(--warning-base)]">{r.changes_requested}</td>
+                      <td className="text-center py-3 px-4 text-[var(--text-tertiary)]">{r.comments}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </section>
+
+      {/* Comparison Summary */}
+      {isComparing && compareData && (
+        <section className="rounded-2xl bg-gradient-to-br from-[var(--bg-elevated)] to-[var(--bg-surface)] border border-[var(--border-subtle)] p-6">
+          <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-4">Period Comparison Summary</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div>
+              <p className="text-xs uppercase tracking-wider text-[var(--text-muted)] mb-1">Bug Delta</p>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-bold text-[var(--text-primary)]">
+                  {data.open_bugs - compareData.open_bugs}
+                </span>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wider text-[var(--text-muted)] mb-1">PR Delta</p>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-bold text-[var(--text-primary)]">
+                  {data.prs_merged - compareData.prs_merged}
+                </span>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wider text-[var(--text-muted)] mb-1">Points Delta</p>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-bold text-[var(--text-primary)]">
+                  {(data.story_points_completed - compareData.story_points_completed).toFixed(1)}
+                </span>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wider text-[var(--text-muted)] mb-1">Review Delta</p>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-bold text-[var(--text-primary)]">
+                  {data.total_reviews - compareData.total_reviews}
+                </span>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}

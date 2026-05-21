@@ -82,6 +82,30 @@ async def get_dora_metrics(
     return dora.model_dump()
 
 
+@router.get("/qa-metrics")
+async def get_qa_data_cloud_metrics(
+    quarter: str = Query(..., description="Quarter in format YYYY-QN"),
+    refresh: bool = Query(False, description="Force refresh from DX Data Cloud"),
+    db: Session = Depends(get_db)
+):
+    """Get QA metrics from DX Data Cloud (uses DB cache, 6hr TTL)."""
+    metrics = await dx_service.sync_qa_cloud_metrics(db, quarter, force=refresh)
+    return metrics.model_dump()
+
+
+@router.get("/executive")
+async def get_executive_dashboard(
+    quarter: str = Query(..., description="Quarter in format YYYY-QN")
+):
+    """
+    Get executive dashboard metrics from DX Data Cloud.
+    This is the single-source-of-truth endpoint for the main dashboard.
+    All data comes from DX Data Cloud (no direct GitHub/Jira API calls).
+    """
+    metrics = await dx_service.get_executive_dashboard_metrics(quarter)
+    return metrics.model_dump()
+
+
 @router.get("/compare")
 async def compare_quarters(
     quarter1: str = Query(..., description="First quarter (current)"),
@@ -145,25 +169,31 @@ async def get_dashboard_data(
     db: Session = Depends(get_db)
 ):
     """Get complete dashboard data for DX metrics page (uses DB cache)."""
+    # All data is now cached in DB - should be instant after first load
+
     # Get current quarter data from DB (with sync if needed)
     cached_data = await dx_service.sync_dx_data_for_quarter(db, quarter, force=refresh)
 
-    # Get DORA metrics (always from API for now)
-    dora = await dx_service.get_dora_metrics_for_quarter(quarter)
+    # Get DORA metrics (cached in DB, 6hr TTL)
+    dora = await dx_service.get_cached_dora_metrics(db, quarter, force=refresh)
 
-    # Get team info (always from API)
-    team = await dx_service.get_team_info()
+    # Get team info (cached in DB, 24hr TTL)
+    team = await dx_service.get_cached_team_info(db, force=refresh)
 
-    # Get benchmarks if snapshot exists
+    # Get benchmarks if snapshot exists (cached in DB, 24hr TTL)
     benchmarks = None
     if cached_data.get("snapshot"):
-        benchmarks = await dx_service.get_org_benchmarks(cached_data["snapshot"]["id"])
+        benchmarks = await dx_service.get_cached_benchmarks(db, cached_data["snapshot"]["id"], force=refresh)
+
+    # QA Data Cloud metrics are fetched separately via /api/dx/qa-metrics endpoint
+    # to avoid blocking the dashboard load (those queries take 60+ seconds)
 
     response = {
         "quarter": quarter,
         "snapshot": cached_data.get("snapshot"),
         "metrics": cached_data.get("metrics"),
         "dora": dora.model_dump(),
+        "qa_cloud_metrics": None,  # Fetched separately via /api/dx/qa-metrics
         "pr_metrics": None,  # Can be added later from DB
         "team": team.model_dump() if team else None,
         "benchmarks": benchmarks,
