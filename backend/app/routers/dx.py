@@ -95,14 +95,18 @@ async def get_qa_data_cloud_metrics(
 
 @router.get("/executive")
 async def get_executive_dashboard(
-    quarter: str = Query(..., description="Quarter in format YYYY-QN")
+    quarter: str = Query(..., description="Quarter in format YYYY-QN"),
+    project: str | None = Query(None, description="Optional Jira project key (e.g. 'DESK'); 'ALL' or omitted = no filter"),
 ):
     """
     Get executive dashboard metrics from DX Data Cloud.
     This is the single-source-of-truth endpoint for the main dashboard.
     All data comes from DX Data Cloud (no direct GitHub/Jira API calls).
+
+    The `project` filter scopes Jira-sourced metrics (bugs, story points,
+    defect/velocity trends). PR and review metrics remain team-wide.
     """
-    metrics = await dx_service.get_executive_dashboard_metrics(quarter)
+    metrics = await dx_service.get_executive_dashboard_metrics(quarter, project=project)
     return metrics.model_dump()
 
 

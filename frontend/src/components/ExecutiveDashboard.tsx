@@ -57,6 +57,7 @@ interface QAReportedBugs {
 
 interface Props {
   quarter: string;
+  project: string;
   compareQuarter: string | null;
   onExitCompare?: () => void;
 }
@@ -162,7 +163,7 @@ function Card({ children, className = "" }: { children: React.ReactNode; classNa
   );
 }
 
-export default function ExecutiveDashboard({ quarter, compareQuarter, onExitCompare }: Props) {
+export default function ExecutiveDashboard({ quarter, project, compareQuarter, onExitCompare }: Props) {
   const [data, setData] = useState<ExecutiveMetrics | null>(null);
   const [compareData, setCompareData] = useState<ExecutiveMetrics | null>(null);
   const [bugsData, setBugsData] = useState<QAReportedBugs | null>(null);
@@ -182,9 +183,11 @@ export default function ExecutiveDashboard({ quarter, compareQuarter, onExitComp
           return r.ok ? ((await r.json()) as T) : null;
         };
 
+        const projectQS = project && project !== "ALL" ? `&project=${encodeURIComponent(project)}` : "";
+
         const [exec, bugs] = await Promise.all([
-          fetchJson<ExecutiveMetrics>(`${API_BASE}/api/dx/executive?quarter=${quarter}`),
-          fetchJson<QAReportedBugs>(`${API_BASE}/api/jira/qa-reported-bugs?quarter=${quarter}`),
+          fetchJson<ExecutiveMetrics>(`${API_BASE}/api/dx/executive?quarter=${quarter}${projectQS}`),
+          fetchJson<QAReportedBugs>(`${API_BASE}/api/jira/qa-reported-bugs?quarter=${quarter}${projectQS}`),
         ]);
         if (!exec) throw new Error("Failed to fetch executive metrics");
         setData(exec);
@@ -192,8 +195,8 @@ export default function ExecutiveDashboard({ quarter, compareQuarter, onExitComp
 
         if (compareQuarter) {
           const [execCmp, bugsCmp] = await Promise.all([
-            fetchJson<ExecutiveMetrics>(`${API_BASE}/api/dx/executive?quarter=${compareQuarter}`),
-            fetchJson<QAReportedBugs>(`${API_BASE}/api/jira/qa-reported-bugs?quarter=${compareQuarter}`),
+            fetchJson<ExecutiveMetrics>(`${API_BASE}/api/dx/executive?quarter=${compareQuarter}${projectQS}`),
+            fetchJson<QAReportedBugs>(`${API_BASE}/api/jira/qa-reported-bugs?quarter=${compareQuarter}${projectQS}`),
           ]);
           setCompareData(execCmp);
           setCompareBugsData(bugsCmp);
@@ -208,7 +211,7 @@ export default function ExecutiveDashboard({ quarter, compareQuarter, onExitComp
       }
     };
     fetchData();
-  }, [quarter, compareQuarter]);
+  }, [quarter, project, compareQuarter]);
 
   const calculateTrend = (current: number, previous: number | undefined) => {
     if (!previous || previous === 0) return undefined;

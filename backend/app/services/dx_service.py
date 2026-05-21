@@ -1453,8 +1453,43 @@ class ExecutiveMetrics(BaseModel):
     top_reviewers: list[dict] = []
 
 
-async def _get_executive_bug_metrics(start_date: str, end_date: str) -> dict:
+def _project_clause(project: str | None, alias: str = "ji", join_alias: str = "jproj") -> tuple[str, str]:
+    """Return (extra_join_sql, where_filter_sql) to scope a Jira query to a single project.
+
+    Returns ('', '') when project is None or 'ALL' — caller adds nothing to the SQL.
+    Otherwise returns a JOIN onto jira_projects + an `AND jproj.key = '...'` clause.
+    """
+    if not project or project == "ALL":
+        return "", ""
+    safe = project.replace("'", "")
+    join = f" JOIN jira_projects {join_alias} ON {alias}.project_id = {join_alias}.id"
+    where = f" AND {join_alias}.key = '{safe}'"
+    return join, where
+
+
+def _repo_clause(project: str | None, repo_id_expr: str, join_alias: str = "rep") -> tuple[str, str]:
+    """Return (extra_join_sql, where_filter_sql) to scope a PR/review query to repos for a project.
+
+    Maps Jira project key → list of repo names via PROJECT_CONFIG. Returns ('', '')
+    when project is None / 'ALL' / unknown / has no repos.
+    `repo_id_expr` is the SQL expression for the row's repo id (e.g. 'pr.repo_id').
+    """
+    if not project or project == "ALL":
+        return "", ""
+    from app.config import PROJECT_CONFIG
+    cfg = PROJECT_CONFIG.get(project)
+    if not cfg or not cfg.get("repos"):
+        return "", ""
+    safe_names = [r.replace("'", "") for r in cfg["repos"]]
+    in_list = ", ".join(f"'{n}'" for n in safe_names)
+    join = f" JOIN repos {join_alias} ON {repo_id_expr} = {join_alias}.id"
+    where = f" AND {join_alias}.name IN ({in_list})"
+    return join, where
+
+
+async def _get_executive_bug_metrics(start_date: str, end_date: str, project: str | None = None) -> dict:
     """Get bug metrics for executive dashboard using exact user query pattern."""
+    proj_join, proj_where = _project_clause(project, alias="ji", join_alias="qbp")
     # Use exact same team hierarchy pattern that returns 132 bugs
     sql = f"""
     WITH qa_team_ids AS (
@@ -1476,7 +1511,7 @@ async def _get_executive_bug_metrics(start_date: str, end_date: str) -> dict:
       FROM jira_issues ji
       JOIN jira_issue_types jit ON jit.id = ji.issue_type_id
       JOIN jira_statuses js ON js.id = ji.status_id
-      LEFT JOIN jira_priorities jp ON jp.id = ji.priority_id
+      LEFT JOIN jira_priorities jp ON jp.id = ji.priority_id{proj_join}
       WHERE jit.name ILIKE '%bug%'
         AND ji.deleted_at IS NULL
         AND ji.created_at >= '{start_date}'
@@ -1485,7 +1520,7 @@ async def _get_executive_bug_metrics(start_date: str, end_date: str) -> dict:
           ji.user_id IN (SELECT id FROM qa_jira_users)
           OR ji.reporter_id IN (SELECT id FROM qa_jira_users)
           OR ji.creator_id IN (SELECT id FROM qa_jira_users)
-        )
+        ){proj_where}
     )
     SELECT
       COUNT(CASE WHEN status_category != 'Done' THEN 1 END) AS open_bugs,
@@ -1511,8 +1546,9 @@ async def _get_executive_bug_metrics(start_date: str, end_date: str) -> dict:
     return result
 
 
-async def _get_executive_velocity_metrics(start_date: str, end_date: str) -> dict:
+async def _get_executive_velocity_metrics(start_date: str, end_date: str, project: str | None = None) -> dict:
     """Get velocity metrics for executive dashboard."""
+    proj_join, proj_where = _project_clause(project, alias="i", join_alias="jproj")
     velocity_sql = f"""
     SELECT
         COALESCE(SUM(CASE WHEN js.name = 'Done' THEN i.story_points ELSE 0 END), 0) as completed_points,
@@ -1523,13 +1559,13 @@ async def _get_executive_velocity_metrics(start_date: str, end_date: str) -> dic
     JOIN jira_users ju ON i.user_id = ju.id
     JOIN dx_users du ON du.email = ju.email
     JOIN dx_teams dt ON du.team_id = dt.id
-    LEFT JOIN jira_statuses js ON i.status_id = js.id
+    LEFT JOIN jira_statuses js ON i.status_id = js.id{proj_join}
     WHERE dt.source_id = '{QA_TEAM_ID}'
       AND i.deleted_at IS NULL
       AND (
         (i.resolution_date >= '{start_date}' AND i.resolution_date < '{end_date}')
         OR (i.resolution_date IS NULL AND i.created_at < '{end_date}')
-      )
+      ){proj_where}
     """
 
     results = await _run_sql_query(velocity_sql)
@@ -1546,8 +1582,14 @@ async def _get_executive_velocity_metrics(start_date: str, end_date: str) -> dic
     return result
 
 
-async def _get_executive_pr_metrics(start_date: str, end_date: str) -> dict:
+async def _get_executive_pr_metrics(start_date: str, end_date: str, project: str | None = None) -> dict:
     """Get PR metrics for executive dashboard."""
+    pr_repo_join, pr_repo_where = _repo_clause(project, "pr.repo_id", join_alias="rep")
+    # For reviews: filter via the parent PR's repo
+    rev_repo_join, rev_repo_where = _repo_clause(project, "rev_pr.repo_id", join_alias="rep")
+    if rev_repo_join:
+        rev_repo_join = " JOIN pull_requests rev_pr ON prr.pull_request_id = rev_pr.id" + rev_repo_join
+
     pr_sql = f"""
     SELECT
         COUNT(*) as total_prs,
@@ -1555,22 +1597,22 @@ async def _get_executive_pr_metrics(start_date: str, end_date: str) -> dict:
         AVG(CASE WHEN pr.merged IS NOT NULL THEN pr.open_to_merge END) as avg_merge_seconds
     FROM pull_requests pr
     JOIN dx_users du ON pr.dx_user_id = du.id
-    JOIN dx_teams dt ON du.team_id = dt.id
+    JOIN dx_teams dt ON du.team_id = dt.id{pr_repo_join}
     WHERE dt.source_id = '{QA_TEAM_ID}'
       AND pr.created >= '{start_date}'
       AND pr.created < '{end_date}'
-      AND pr.bot_authored = false
+      AND pr.bot_authored = false{pr_repo_where}
     """
 
     review_sql = f"""
     SELECT COUNT(*) as total_reviews
     FROM pull_request_reviews prr
     JOIN dx_users du ON prr.dx_user_id = du.id
-    JOIN dx_teams dt ON du.team_id = dt.id
+    JOIN dx_teams dt ON du.team_id = dt.id{rev_repo_join}
     WHERE dt.source_id = '{QA_TEAM_ID}'
       AND prr.created >= '{start_date}'
       AND prr.created < '{end_date}'
-      AND prr.bot_authored = false
+      AND prr.bot_authored = false{rev_repo_where}
     """
 
     pr_results, review_results = await asyncio.gather(
@@ -1592,8 +1634,9 @@ async def _get_executive_pr_metrics(start_date: str, end_date: str) -> dict:
     return result
 
 
-async def _get_executive_defect_trend(start_date: str, end_date: str) -> list[dict]:
+async def _get_executive_defect_trend(start_date: str, end_date: str, project: str | None = None) -> list[dict]:
     """Get weekly defect trend."""
+    proj_join, proj_where = _project_clause(project, alias="i", join_alias="jproj")
     sql = f"""
     SELECT
         DATE_TRUNC('week', i.created_at)::date as week,
@@ -1605,12 +1648,12 @@ async def _get_executive_defect_trend(start_date: str, end_date: str) -> list[di
     JOIN jira_issue_types it ON i.issue_type_id = it.id
     JOIN jira_users ju ON i.user_id = ju.id
     JOIN dx_users du ON du.email = ju.email
-    JOIN dx_teams dt ON du.team_id = dt.id
+    JOIN dx_teams dt ON du.team_id = dt.id{proj_join}
     WHERE dt.source_id = '{QA_TEAM_ID}'
       AND it.name IN ('Bug', 'Defect')
       AND i.created_at >= '{start_date}'
       AND i.created_at < '{end_date}'
-      AND i.deleted_at IS NULL
+      AND i.deleted_at IS NULL{proj_where}
     GROUP BY DATE_TRUNC('week', i.created_at)
     ORDER BY week
     """
@@ -1626,8 +1669,9 @@ async def _get_executive_defect_trend(start_date: str, end_date: str) -> list[di
     ]
 
 
-async def _get_executive_pr_trend(start_date: str, end_date: str) -> list[dict]:
+async def _get_executive_pr_trend(start_date: str, end_date: str, project: str | None = None) -> list[dict]:
     """Get weekly PR trend."""
+    repo_join, repo_where = _repo_clause(project, "pr.repo_id", join_alias="rep")
     sql = f"""
     SELECT
         DATE_TRUNC('week', pr.created)::date as week,
@@ -1635,11 +1679,11 @@ async def _get_executive_pr_trend(start_date: str, end_date: str) -> list[dict]:
         SUM(CASE WHEN pr.merged IS NOT NULL THEN 1 ELSE 0 END) as merged
     FROM pull_requests pr
     JOIN dx_users du ON pr.dx_user_id = du.id
-    JOIN dx_teams dt ON du.team_id = dt.id
+    JOIN dx_teams dt ON du.team_id = dt.id{repo_join}
     WHERE dt.source_id = '{QA_TEAM_ID}'
       AND pr.created >= '{start_date}'
       AND pr.created < '{end_date}'
-      AND pr.bot_authored = false
+      AND pr.bot_authored = false{repo_where}
     GROUP BY DATE_TRUNC('week', pr.created)
     ORDER BY week
     """
@@ -1655,8 +1699,9 @@ async def _get_executive_pr_trend(start_date: str, end_date: str) -> list[dict]:
     ]
 
 
-async def _get_executive_velocity_trend(start_date: str, end_date: str) -> list[dict]:
+async def _get_executive_velocity_trend(start_date: str, end_date: str, project: str | None = None) -> list[dict]:
     """Get weekly velocity trend (story points completed)."""
+    proj_join, proj_where = _project_clause(project, alias="i", join_alias="jproj")
     sql = f"""
     SELECT
         DATE_TRUNC('week', i.resolution_date)::date as week,
@@ -1665,11 +1710,11 @@ async def _get_executive_velocity_trend(start_date: str, end_date: str) -> list[
     FROM jira_issues i
     JOIN jira_users ju ON i.user_id = ju.id
     JOIN dx_users du ON du.email = ju.email
-    JOIN dx_teams dt ON du.team_id = dt.id
+    JOIN dx_teams dt ON du.team_id = dt.id{proj_join}
     WHERE dt.source_id = '{QA_TEAM_ID}'
       AND i.resolution_date >= '{start_date}'
       AND i.resolution_date < '{end_date}'
-      AND i.deleted_at IS NULL
+      AND i.deleted_at IS NULL{proj_where}
     GROUP BY DATE_TRUNC('week', i.resolution_date)
     ORDER BY week
     """
@@ -1685,8 +1730,9 @@ async def _get_executive_velocity_trend(start_date: str, end_date: str) -> list[
     ]
 
 
-async def _get_executive_team_contributions(start_date: str, end_date: str) -> list[dict]:
+async def _get_executive_team_contributions(start_date: str, end_date: str, project: str | None = None) -> list[dict]:
     """Get team contributions breakdown."""
+    repo_join, repo_where = _repo_clause(project, "pr.repo_id", join_alias="rep")
     sql = f"""
     SELECT
         du.name as user_name,
@@ -1694,11 +1740,11 @@ async def _get_executive_team_contributions(start_date: str, end_date: str) -> l
         SUM(CASE WHEN pr.merged IS NOT NULL THEN 1 ELSE 0 END) as prs_merged
     FROM pull_requests pr
     JOIN dx_users du ON pr.dx_user_id = du.id
-    JOIN dx_teams dt ON du.team_id = dt.id
+    JOIN dx_teams dt ON du.team_id = dt.id{repo_join}
     WHERE dt.source_id = '{QA_TEAM_ID}'
       AND pr.created >= '{start_date}'
       AND pr.created < '{end_date}'
-      AND pr.bot_authored = false
+      AND pr.bot_authored = false{repo_where}
     GROUP BY du.name
     HAVING COUNT(*) > 0
     ORDER BY prs_merged DESC, prs_opened DESC
@@ -1715,8 +1761,9 @@ async def _get_executive_team_contributions(start_date: str, end_date: str) -> l
     ]
 
 
-async def _get_executive_story_points_by_member(start_date: str, end_date: str) -> list[dict]:
+async def _get_executive_story_points_by_member(start_date: str, end_date: str, project: str | None = None) -> list[dict]:
     """Get story points breakdown by member."""
+    proj_join, proj_where = _project_clause(project, alias="i", join_alias="jproj")
     sql = f"""
     SELECT
         du.name as user_name,
@@ -1728,13 +1775,13 @@ async def _get_executive_story_points_by_member(start_date: str, end_date: str) 
     JOIN jira_users ju ON i.user_id = ju.id
     JOIN dx_users du ON du.email = ju.email
     JOIN dx_teams dt ON du.team_id = dt.id
-    LEFT JOIN jira_statuses js ON i.status_id = js.id
+    LEFT JOIN jira_statuses js ON i.status_id = js.id{proj_join}
     WHERE dt.source_id = '{QA_TEAM_ID}'
       AND i.deleted_at IS NULL
       AND (
         i.created_at >= '{start_date}' AND i.created_at < '{end_date}'
         OR i.resolution_date >= '{start_date}' AND i.resolution_date < '{end_date}'
-      )
+      ){proj_where}
     GROUP BY du.name
     HAVING SUM(i.story_points) > 0 OR COUNT(*) > 0
     ORDER BY completed_points DESC
@@ -1753,19 +1800,23 @@ async def _get_executive_story_points_by_member(start_date: str, end_date: str) 
     ]
 
 
-async def _get_executive_review_trend(start_date: str, end_date: str) -> list[dict]:
+async def _get_executive_review_trend(start_date: str, end_date: str, project: str | None = None) -> list[dict]:
     """Get weekly review trend."""
+    repo_join_inner, repo_where = _repo_clause(project, "rev_pr.repo_id", join_alias="rep")
+    repo_join = ""
+    if repo_join_inner:
+        repo_join = " JOIN pull_requests rev_pr ON prr.pull_request_id = rev_pr.id" + repo_join_inner
     sql = f"""
     SELECT
         DATE_TRUNC('week', prr.created)::date as week,
         COUNT(*) as reviews
     FROM pull_request_reviews prr
     JOIN dx_users du ON prr.dx_user_id = du.id
-    JOIN dx_teams dt ON du.team_id = dt.id
+    JOIN dx_teams dt ON du.team_id = dt.id{repo_join}
     WHERE dt.source_id = '{QA_TEAM_ID}'
       AND prr.created >= '{start_date}'
       AND prr.created < '{end_date}'
-      AND prr.bot_authored = false
+      AND prr.bot_authored = false{repo_where}
     GROUP BY DATE_TRUNC('week', prr.created)
     ORDER BY week
     """
@@ -1780,8 +1831,12 @@ async def _get_executive_review_trend(start_date: str, end_date: str) -> list[di
     ]
 
 
-async def _get_executive_top_reviewers(start_date: str, end_date: str) -> list[dict]:
+async def _get_executive_top_reviewers(start_date: str, end_date: str, project: str | None = None) -> list[dict]:
     """Get top reviewers with breakdown - same query pattern as _get_pr_review_stats but sorted by reviews."""
+    repo_join_inner, repo_where = _repo_clause(project, "rev_pr.repo_id", join_alias="rep")
+    repo_join = ""
+    if repo_join_inner:
+        repo_join = " JOIN pull_requests rev_pr ON prr.pull_request_id = rev_pr.id" + repo_join_inner
     sql = f"""
     WITH qa_users AS (
       SELECT du.id AS dx_user_id, du.name, du.email
@@ -1794,10 +1849,10 @@ async def _get_executive_top_reviewers(start_date: str, end_date: str) -> list[d
       SELECT prr.dx_user_id,
         COUNT(DISTINCT prr.pull_request_id) AS reviews_done,
         SUM(prr.comment_count) AS total_comments
-      FROM pull_request_reviews prr
+      FROM pull_request_reviews prr{repo_join}
       WHERE prr.created >= '{start_date}' AND prr.created < '{end_date}'
         AND prr.dx_user_id IN (SELECT dx_user_id FROM qa_users)
-        AND prr.bot_authored = false
+        AND prr.bot_authored = false{repo_where}
       GROUP BY prr.dx_user_id
     )
     SELECT
@@ -1823,22 +1878,27 @@ async def _get_executive_top_reviewers(start_date: str, end_date: str) -> list[d
     ]
 
 
-async def get_executive_dashboard_metrics(quarter: str) -> ExecutiveMetrics:
-    """Get all executive dashboard metrics from DX Data Cloud."""
+async def get_executive_dashboard_metrics(quarter: str, project: str | None = None) -> ExecutiveMetrics:
+    """Get all executive dashboard metrics from DX Data Cloud.
+
+    `project` (optional Jira key like 'DESK') narrows results to that single project:
+    Jira-sourced metrics filter via `jira_projects.key`; PR/review metrics filter via
+    the repos mapped in PROJECT_CONFIG[project].repos. The QA-team join is always
+    enforced — selection narrows scope, never widens it beyond the QA team.
+    """
     start_date, end_date = _get_quarter_date_range(quarter)
 
-    # Run all queries in parallel
     results = await asyncio.gather(
-        _get_executive_bug_metrics(start_date, end_date),
-        _get_executive_velocity_metrics(start_date, end_date),
-        _get_executive_pr_metrics(start_date, end_date),
-        _get_executive_defect_trend(start_date, end_date),
-        _get_executive_pr_trend(start_date, end_date),
-        _get_executive_velocity_trend(start_date, end_date),
-        _get_executive_team_contributions(start_date, end_date),
-        _get_executive_story_points_by_member(start_date, end_date),
-        _get_executive_review_trend(start_date, end_date),
-        _get_executive_top_reviewers(start_date, end_date),
+        _get_executive_bug_metrics(start_date, end_date, project),
+        _get_executive_velocity_metrics(start_date, end_date, project),
+        _get_executive_pr_metrics(start_date, end_date, project),
+        _get_executive_defect_trend(start_date, end_date, project),
+        _get_executive_pr_trend(start_date, end_date, project),
+        _get_executive_velocity_trend(start_date, end_date, project),
+        _get_executive_team_contributions(start_date, end_date, project),
+        _get_executive_story_points_by_member(start_date, end_date, project),
+        _get_executive_review_trend(start_date, end_date, project),
+        _get_executive_top_reviewers(start_date, end_date, project),
         return_exceptions=True
     )
 

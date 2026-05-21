@@ -32,6 +32,7 @@ interface TeamData {
 
 interface Props {
   quarter: string;
+  project: string;
 }
 
 const tooltipStyle = {
@@ -69,7 +70,7 @@ function SectionHeader({ title, subtitle, badge }: { title: string; subtitle?: s
   );
 }
 
-export default function TeamView({ quarter }: Props) {
+export default function TeamView({ quarter, project }: Props) {
   const [data, setData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +80,8 @@ export default function TeamView({ quarter }: Props) {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetch(`${API_BASE}/api/dx/executive?quarter=${quarter}`);
+        const projectQS = project && project !== "ALL" ? `&project=${encodeURIComponent(project)}` : "";
+        const response = await fetch(`${API_BASE}/api/dx/executive?quarter=${quarter}${projectQS}`);
         if (!response.ok) throw new Error("Failed to fetch team metrics");
         const result = await response.json();
         setData(result);
@@ -90,7 +92,7 @@ export default function TeamView({ quarter }: Props) {
       }
     };
     fetchData();
-  }, [quarter]);
+  }, [quarter, project]);
 
   if (loading) {
     return (

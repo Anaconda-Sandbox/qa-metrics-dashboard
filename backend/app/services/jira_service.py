@@ -125,14 +125,27 @@ def _quarter_bounds(quarter: str | None) -> tuple[str, str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), label
 
 
-async def get_qa_reported_bugs(quarter: str | None = None, use_cache: bool = True) -> QAReportedBugsResponse:
+async def get_qa_reported_bugs(
+    quarter: str | None = None,
+    project: str | None = None,
+    use_cache: bool = True,
+) -> QAReportedBugsResponse:
     """Bugs reported by QA team in a given quarter (total + critical count).
 
     Critical = priority in (Highest, High), matching the convention used in
     dx_service for the executive dashboard.
+
+    `project` (optional Jira key like 'DESK') narrows results to that single
+    project. 'ALL' or None returns the team-wide count.
     """
     start, end, label = _quarter_bounds(quarter)
-    cache_key = f"qa_reported_bugs:{label}"
+    project_key = (project or "").strip()
+    project_clause = ""
+    if project_key and project_key != "ALL":
+        # Jira keys are alphanumeric — strip quotes defensively
+        safe = project_key.replace('"', "").replace("'", "")
+        project_clause = f' AND project = "{safe}"'
+    cache_key = f"qa_reported_bugs:{label}:{project_key or 'ALL'}"
 
     if use_cache:
         cached = cache_service.cache_get(cache_key)
@@ -143,11 +156,11 @@ async def get_qa_reported_bugs(quarter: str | None = None, use_cache: bool = Tru
         fields = "priority"
         date_clause = f'created >= "{start}" AND created < "{end}"'
         total_jql = (
-            f'issuetype = Bug AND reporter in membersOf("QA") AND {date_clause} '
+            f'issuetype = Bug AND reporter in membersOf("QA") AND {date_clause}{project_clause} '
             f'ORDER BY created DESC'
         )
         critical_jql = (
-            f'issuetype = Bug AND reporter in membersOf("QA") AND {date_clause} '
+            f'issuetype = Bug AND reporter in membersOf("QA") AND {date_clause}{project_clause} '
             f'AND priority in (Highest, High)'
         )
 

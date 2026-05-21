@@ -20,12 +20,14 @@ router = APIRouter(prefix="/api/jira", tags=["jira"])
 @router.get("/qa-reported-bugs", response_model=QAReportedBugsResponse)
 async def qa_reported_bugs(
     quarter: str | None = Query(default=None, description="Quarter in format YYYY-QN, e.g., 2026-Q2. Defaults to current quarter."),
+    project: str | None = Query(default=None, description="Optional Jira project key (e.g., 'DESK'). 'ALL' or omitted = no filter."),
 ):
-    """Bugs reported by the QA team in the given quarter, with a critical-priority sub-count.
+    """Bugs reported by the QA team in the given quarter, with a high-priority sub-count.
 
-    Source: Jira (`reporter in membersOf(\"QA\")`), critical = priority in (Highest, High).
+    Source: Jira (`reporter in membersOf(\"QA\")`). When `project` is set, results
+    narrow to that single project; otherwise the count is team-wide.
     """
-    return await jira_service.get_qa_reported_bugs(quarter=quarter)
+    return await jira_service.get_qa_reported_bugs(quarter=quarter, project=project)
 
 
 @router.get("/defect-density", response_model=DefectDensityResponse)

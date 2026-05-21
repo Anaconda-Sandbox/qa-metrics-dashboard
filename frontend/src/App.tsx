@@ -114,6 +114,7 @@ export default function App() {
               {view === "dashboard" ? (
                 <ExecutiveDashboard
                   quarter={quarter}
+                  project={project}
                   compareQuarter={isComparing ? compareQuarter : null}
                   onExitCompare={() => {
                     setIsComparing(false);
@@ -121,7 +122,7 @@ export default function App() {
                   }}
                 />
               ) : view === "team" ? (
-                <TeamView quarter={quarter} />
+                <TeamView quarter={quarter} project={project} />
               ) : view === "dx" ? (
                 <DXDashboard
                   quarter={quarter}
