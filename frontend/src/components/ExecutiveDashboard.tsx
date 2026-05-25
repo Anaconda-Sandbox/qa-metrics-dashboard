@@ -17,6 +17,8 @@ const API_BASE = import.meta.env.VITE_API_URL || "";
 
 interface ExecutiveMetrics {
   open_bugs: number;
+  resolved_bugs: number;
+  bugs_fixed_by_qa: number;
   critical_bugs: number;
   bug_resolution_rate: number | null;
   defect_density: number | null;
@@ -373,6 +375,13 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
         <SectionHeader title="Executive Summary" subtitle={periodLabel} />
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
           <KPICard
+            title="Coverage"
+            value={28}
+            suffix=" Projects"
+            description="24 dedicated + 4 support"
+            color="info"
+          />
+          <KPICard
             title="QA-Reported Bugs"
             scrollTo="quality-metrics"
             value={bugsData?.total ?? data.open_bugs}
@@ -396,6 +405,14 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
             description="Bugs resolved"
             trend={isComparing ? calculateTrend(data.bug_resolution_rate ?? 0, compareData?.bug_resolution_rate ?? undefined) : undefined}
             color={(data.bug_resolution_rate ?? 0) >= 80 ? "success" : (data.bug_resolution_rate ?? 0) >= 60 ? "warning" : "error"}
+          />
+          <KPICard
+            title="Bugs Fixed by QA"
+            scrollTo="quality-metrics"
+            value={data.bugs_fixed_by_qa}
+            description={`qa-fixed in ${periodLabel}`}
+            trend={isComparing ? calculateTrend(data.bugs_fixed_by_qa, compareData?.bugs_fixed_by_qa) : undefined}
+            color="success"
           />
           <KPICard
             title="Total PRs"

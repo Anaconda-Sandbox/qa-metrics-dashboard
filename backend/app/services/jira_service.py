@@ -125,6 +125,30 @@ def _quarter_bounds(quarter: str | None) -> tuple[str, str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), label
 
 
+async def get_qa_fixed_count(quarter: str | None = None, project: str | None = None) -> int:
+    """Count tickets with the `qa-fixed` label that were updated in the quarter.
+
+    The QA team applies the `qa-fixed` label to bugs they found and fixed
+    themselves (regardless of project). This counts QA-driven fixes as
+    activity, distinct from `Bugs Resolved` which counts QA-reported bugs
+    that were resolved in Jira.
+
+    Time scoping uses `updated` (touched in the quarter) rather than
+    `resolutiondate` so the metric reflects ongoing verification work.
+    """
+    start, end, _label = _quarter_bounds(quarter)
+    project_clause = ""
+    if project and project != "ALL":
+        safe = project.replace('"', "").replace("'", "")
+        project_clause = f' AND project = "{safe}"'
+    jql = (
+        f'labels = "qa-fixed" '
+        f'AND updated >= "{start}" AND updated < "{end}"{project_clause}'
+    )
+    data = await _jql_search(jql, "id", max_results=2000)
+    return len(data.get("issues", []))
+
+
 async def get_qa_bug_metrics(quarter: str | None = None, project: str | None = None) -> dict:
     """Canonical bug metrics for the QA team, per the source-of-truth JQL.
 

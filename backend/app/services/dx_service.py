@@ -1425,6 +1425,8 @@ class ExecutiveMetrics(BaseModel):
     """Executive dashboard metrics from DX Data Cloud."""
     # Quality KPIs
     open_bugs: int = 0
+    resolved_bugs: int = 0
+    bugs_fixed_by_qa: int = 0
     critical_bugs: int = 0
     bug_resolution_rate: float | None = None
     defect_density: float | None = None
@@ -1526,6 +1528,8 @@ async def _get_executive_bug_metrics(start_date: str, end_date: str, project: st
         if snap:
             return {
                 "open_bugs": snap["open_bugs"],
+                "resolved_bugs": snap["resolved_bugs"],
+                "bugs_fixed_by_qa": snap.get("qa_fixed_count", 0),
                 "critical_bugs": snap["critical_bugs"],
                 "resolution_rate": snap["resolution_rate"],
             }
@@ -1535,14 +1539,17 @@ async def _get_executive_bug_metrics(start_date: str, end_date: str, project: st
     try:
         from app.services import jira_service
         m = await jira_service.get_qa_bug_metrics(quarter=quarter, project=project_key)
+        qa_fixed = await jira_service.get_qa_fixed_count(quarter=quarter, project=project_key)
         return {
             "open_bugs": m["open"],
+            "resolved_bugs": m["resolved"],
+            "bugs_fixed_by_qa": qa_fixed,
             "critical_bugs": m["critical_open"],
             "resolution_rate": m["resolution_rate"],
         }
     except Exception as e:
         logger.error(f"Live Jira fallback for bug metrics failed: {e}")
-        return {"open_bugs": 0, "critical_bugs": 0, "resolution_rate": 0}
+        return {"open_bugs": 0, "resolved_bugs": 0, "bugs_fixed_by_qa": 0, "critical_bugs": 0, "resolution_rate": 0}
 
 
 async def _get_executive_velocity_metrics(start_date: str, end_date: str, project: str | None = None) -> dict:
@@ -1922,6 +1929,8 @@ async def get_executive_dashboard_metrics(quarter: str, project: str | None = No
     return ExecutiveMetrics(
         # Quality
         open_bugs=bug_metrics.get("open_bugs", 0),
+        resolved_bugs=bug_metrics.get("resolved_bugs", 0),
+        bugs_fixed_by_qa=bug_metrics.get("bugs_fixed_by_qa", 0),
         critical_bugs=bug_metrics.get("critical_bugs", 0),
         bug_resolution_rate=bug_metrics.get("resolution_rate"),
         defect_density=None,  # Calculated elsewhere if needed

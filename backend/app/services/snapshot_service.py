@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Bug-metrics snapshot keys. Stored per (project, quarter) in MetricSnapshot.
 # Read by dx_service._get_executive_bug_metrics for the leadership dashboard.
-BUG_METRIC_TYPES = ("total_bugs", "resolved_bugs", "open_bugs_canonical", "critical_bugs_canonical", "resolution_rate")
+BUG_METRIC_TYPES = ("total_bugs", "resolved_bugs", "open_bugs_canonical", "critical_bugs_canonical", "resolution_rate", "qa_fixed_count")
 
 
 async def snapshot_qa_bug_metrics_for_quarter(quarter: str) -> None:
@@ -32,13 +32,15 @@ async def snapshot_qa_bug_metrics_for_quarter(quarter: str) -> None:
             label = project or "ALL"
             try:
                 metrics = await jira_service.get_qa_bug_metrics(quarter=quarter, project=project)
+                qa_fixed = await jira_service.get_qa_fixed_count(quarter=quarter, project=project)
                 _upsert_metric(db, today, project, quarter, "total_bugs", metrics["total"])
                 _upsert_metric(db, today, project, quarter, "resolved_bugs", metrics["resolved"])
                 _upsert_metric(db, today, project, quarter, "open_bugs_canonical", metrics["open"])
                 _upsert_metric(db, today, project, quarter, "critical_bugs_canonical", metrics["critical_open"])
                 _upsert_metric(db, today, project, quarter, "resolution_rate", metrics["resolution_rate"])
+                _upsert_metric(db, today, project, quarter, "qa_fixed_count", qa_fixed)
                 db.commit()
-                logger.info(f"Bug snapshot {quarter}/{label}: total={metrics['total']} resolved={metrics['resolved']} rate={metrics['resolution_rate']}%")
+                logger.info(f"Bug snapshot {quarter}/{label}: total={metrics['total']} resolved={metrics['resolved']} qa_fixed={qa_fixed} rate={metrics['resolution_rate']}%")
             except Exception as e:
                 logger.error(f"Bug snapshot failed for {quarter}/{label}: {e}")
                 db.rollback()
@@ -82,6 +84,7 @@ def get_latest_bug_metrics(db: Session, project: str | None, quarter: str) -> di
         "open_bugs": int(out.get("open_bugs_canonical", 0)),
         "critical_bugs": int(out.get("critical_bugs_canonical", 0)),
         "resolution_rate": float(out.get("resolution_rate", 0)),
+        "qa_fixed_count": int(out.get("qa_fixed_count", 0)),
         "snapshot_date": latest_date.isoformat() if latest_date else None,
     }
 
