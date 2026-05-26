@@ -641,71 +641,7 @@ export default function DXDashboard({ quarter }: Props) {
         </section>
       )}
 
-      {/* PR Review Stats Table */}
-      {qaCloudMetrics && qaCloudMetrics.pr_review_stats && qaCloudMetrics.pr_review_stats.length > 0 && (
-        <section>
-          <SectionHeader
-            title="PR Review Activity"
-            icon={<svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>}
-            variant="success"
-          />
-          <div className="card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="bg-[var(--bg-overlay)]">
-                    <th className="text-left text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">Team Member</th>
-                    <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">PRs Authored</th>
-                    <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">Reviews Done</th>
-                    <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">Review Comments</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--border-subtle)]">
-                  {qaCloudMetrics.pr_review_stats.map((stat, idx) => (
-                    <tr key={idx} className="hover:bg-[var(--bg-overlay)]/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div>
-                          <p className="text-sm font-medium text-[var(--text-primary)]">{stat.user_name}</p>
-                          <p className="text-xs text-[var(--text-muted)]">{stat.email}</p>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <span className="inline-flex items-center justify-center min-w-[2rem] px-2 py-1 rounded-full bg-[var(--accent-primary)]/10 text-sm font-semibold text-[var(--accent-primary)]">
-                          {stat.prs_authored}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <span className="inline-flex items-center justify-center min-w-[2rem] px-2 py-1 rounded-full bg-[var(--success-base)]/10 text-sm font-semibold text-[var(--success-base)]">
-                          {stat.reviews_done}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-right text-sm text-[var(--text-secondary)]">
-                        {stat.review_comments}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot className="bg-[var(--bg-overlay)]">
-                  <tr>
-                    <td className="px-6 py-4 text-sm font-semibold text-[var(--text-primary)]">
-                      Total ({qaCloudMetrics.pr_review_stats.length} members)
-                    </td>
-                    <td className="px-6 py-4 text-right text-sm font-bold text-[var(--accent-primary)]">
-                      {qaCloudMetrics.pr_review_stats.reduce((sum, s) => sum + s.prs_authored, 0)}
-                    </td>
-                    <td className="px-6 py-4 text-right text-sm font-bold text-[var(--success-base)]">
-                      {qaCloudMetrics.pr_review_stats.reduce((sum, s) => sum + s.reviews_done, 0)}
-                    </td>
-                    <td className="px-6 py-4 text-right text-sm font-bold text-[var(--text-secondary)]">
-                      {qaCloudMetrics.pr_review_stats.reduce((sum, s) => sum + s.review_comments, 0)}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-        </section>
-      )}
+      {/* PR Review Activity moved to Team view (Top Reviewers section, Jira-anchored). */}
 
       {/* Defect Density by Project */}
       {qaCloudMetrics && qaCloudMetrics.defect_density_by_project && qaCloudMetrics.defect_density_by_project.length > 0 && (

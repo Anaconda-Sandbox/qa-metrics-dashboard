@@ -32,6 +32,13 @@ interface TeamData {
     total_issues: number;
     issues_completed: number;
   }>;
+  top_reviewers: Array<{
+    user_name: string;
+    reviews_given: number;
+    approvals: number;
+    changes_requested: number;
+    comments: number;
+  }>;
   automation_health: {
     quarter: string;
     overall: { pass_rate_pct: number; avg_duration_sec: number; total_launches: number; total_tests: number };
@@ -286,6 +293,61 @@ export default function TeamView({ quarter, project }: Props) {
           </Card>
         ) : (
           <Card className="text-center text-[var(--text-muted)]">No PR activity for this quarter.</Card>
+        )}
+      </section>
+
+      {/* Top Reviewers — per-person review breakdown */}
+      <section>
+        <SectionHeader title="Top Reviewers" badge="Code Reviews" subtitle="Distinct PRs reviewed · approvals/changes/comments breakdown" />
+        {data.top_reviewers && data.top_reviewers.length > 0 ? (
+          <Card>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border-subtle)]">
+                    <th className="text-left py-3 px-4 text-[var(--text-muted)] font-medium">Reviewer</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">
+                      <span className="inline-flex items-center gap-1.5 justify-center">
+                        Total
+                        <InfoTip>Distinct PRs this person submitted at least one review on (any review_type).</InfoTip>
+                      </span>
+                    </th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">
+                      <span className="inline-flex items-center gap-1.5 justify-center">
+                        Approved
+                        <InfoTip>Review actions of type APPROVAL.</InfoTip>
+                      </span>
+                    </th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">
+                      <span className="inline-flex items-center gap-1.5 justify-center">
+                        Changes
+                        <InfoTip>Review actions of type CHANGES_REQUESTED.</InfoTip>
+                      </span>
+                    </th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">
+                      <span className="inline-flex items-center gap-1.5 justify-center">
+                        Comments
+                        <InfoTip>Total individual comment threads left across reviews.</InfoTip>
+                      </span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.top_reviewers.map((r) => (
+                    <tr key={r.user_name} className="border-b border-[var(--border-subtle)]/40 hover:bg-[var(--bg-surface)]/50 transition-colors">
+                      <td className="py-3 px-4 font-medium text-[var(--text-primary)]">{r.user_name}</td>
+                      <td className="text-center py-3 px-4 text-[var(--info-base)] font-semibold">{r.reviews_given}</td>
+                      <td className="text-center py-3 px-4 text-[var(--success-base)]">{r.approvals}</td>
+                      <td className="text-center py-3 px-4 text-[var(--warning-base)]">{r.changes_requested}</td>
+                      <td className="text-center py-3 px-4 text-[var(--text-tertiary)]">{r.comments}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        ) : (
+          <Card className="text-center text-[var(--text-muted)]">No review activity for this quarter.</Card>
         )}
       </section>
 
