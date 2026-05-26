@@ -20,6 +20,34 @@ async def list_members():
     }
 
 
+@router.get("/qa-team")
+async def qa_team():
+    """Live QA team roster from Jira group `QA`.
+
+    Read path: latest MetricSnapshot row (refreshed hourly). Falls back to
+    a live Jira call if no snapshot is available. Manager comes from DX
+    team.lead — Jira's group endpoint doesn't expose a manager flag.
+    """
+    from app.database import SessionLocal
+    from app.services import snapshot_service, jira_service
+    db = SessionLocal()
+    try:
+        snap = snapshot_service.get_latest_qa_roster(db)
+    finally:
+        db.close()
+    if snap:
+        return {
+            "manager": snap.get("manager"),
+            "members": snap.get("members") or [],
+            "count": snap.get("count", len(snap.get("members") or [])),
+            "snapshot_date": snap.get("snapshot_date"),
+            "source": "snapshot",
+        }
+    # Fallback: live Jira call (no manager — DX team.lead lookup failed too)
+    members = await jira_service.get_qa_team_roster()
+    return {"manager": None, "members": members, "count": len(members), "source": "live"}
+
+
 @router.get("/activity/{username}", response_model=MemberActivityResponse)
 async def member_activity(
     username: str,

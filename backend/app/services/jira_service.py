@@ -125,6 +125,88 @@ def _quarter_bounds(quarter: str | None) -> tuple[str, str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), label
 
 
+async def get_qa_team_roster() -> list[dict]:
+    """Live list of QA team members from Jira's `QA` group.
+
+    Single source of truth for who's on the QA team — replaces the hardcoded
+    ALL_QA_MEMBERS list in config.py. Filters to active accounts only.
+
+    Returns: [{accountId, displayName, email, github_handle?, initials, active}]
+    """
+    settings = get_settings()
+    url = f"{settings.jira_base_url}/rest/api/3/group/member"
+    members: list[dict] = []
+    start_at = 0
+    page_size = 50
+
+    # Inverse map of GITHUB_TO_JIRA_NAME so we can attach a github handle
+    # by display name match.
+    jira_name_to_github = {v: k for k, v in GITHUB_TO_JIRA_NAME.items()}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        while True:
+            params = {"groupname": "QA", "maxResults": page_size, "startAt": start_at, "includeInactiveUsers": "false"}
+            resp = await client.get(url, headers=_auth_header(), params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            for u in data.get("values", []):
+                if not u.get("active", True):
+                    continue
+                name = u.get("displayName", "")
+                initials = "".join(p[0].upper() for p in name.split() if p)[:3] or "?"
+                members.append({
+                    "accountId": u.get("accountId"),
+                    "displayName": name,
+                    "email": u.get("emailAddress", ""),
+                    "github_handle": jira_name_to_github.get(name),
+                    "initials": initials,
+                    "active": True,
+                })
+            if data.get("isLast", True) or len(data.get("values", [])) < page_size:
+                break
+            start_at += page_size
+    members.sort(key=lambda m: m["displayName"].lower())
+    return members
+
+
+async def get_defect_density_by_project(quarter: str | None = None) -> list[dict]:
+    """Per-project defect density from Jira directly.
+
+    For every project in PROJECT_CONFIG, runs two JQLs:
+      total = project = X AND created in Q
+      bugs  = project = X AND issuetype = Bug AND created in Q
+    density = bugs / total * 100.
+
+    Source-of-truth Jira numbers — DX Cloud SQL undercounts because some
+    projects (CLI/PREX/QA/MRKT/CASH) aren't fully ingested into DX.
+
+    Returns a list of dicts: {key, name, total_tickets, bug_count, density_pct}.
+    """
+    from app.config import PROJECT_CONFIG
+    start, end, _label = _quarter_bounds(quarter)
+    out = []
+    for key in PROJECT_CONFIG.keys():
+        try:
+            total_jql = f'project = "{key}" AND created >= "{start}" AND created < "{end}"'
+            bug_jql = f'project = "{key}" AND issuetype = Bug AND created >= "{start}" AND created < "{end}"'
+            total_data = await _jql_search(total_jql, "id", max_results=2000)
+            bug_data = await _jql_search(bug_jql, "id", max_results=2000)
+            total = len(total_data.get("issues", []))
+            bugs = len(bug_data.get("issues", []))
+            density = round((bugs / total) * 100, 2) if total else 0.0
+            out.append({
+                "key": key,
+                "name": PROJECT_CONFIG[key].get("name", key),
+                "total_tickets": total,
+                "bug_count": bugs,
+                "density_pct": density,
+            })
+        except Exception as e:
+            logger.warning(f"defect density fetch failed for {key}: {e}")
+    out.sort(key=lambda r: -r["density_pct"])
+    return out
+
+
 async def get_qa_fixed_count(quarter: str | None = None, project: str | None = None) -> int:
     """Count tickets with the `qa-fixed` label that were updated in the quarter.
 

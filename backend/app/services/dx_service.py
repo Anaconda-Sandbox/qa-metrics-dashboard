@@ -525,6 +525,36 @@ async def get_qa_data_cloud_metrics(quarter: str) -> QADataCloudMetrics:
     pr_review_results = results[4] if not isinstance(results[4], Exception) else []
     defect_by_project_results = results[5] if not isinstance(results[5], Exception) else []
 
+    # Override resolution_rate AND defect_density_by_project with the
+    # Jira-sourced snapshots used by the leadership Dashboard so both views
+    # show the same numbers. DX Cloud SQL undercounts because some projects
+    # (CLI/PREX/QA/MRKT and parts of CASH) aren't fully ingested into DX.
+    try:
+        from app.database import SessionLocal
+        from app.services import snapshot_service
+        db = SessionLocal()
+        try:
+            bug_snap = snapshot_service.get_latest_bug_metrics(db, None, quarter)
+            density_snap = snapshot_service.get_latest_defect_density(db, quarter)
+        finally:
+            db.close()
+        if bug_snap and "resolution_rate" in bug_snap:
+            bug_metrics["resolution_rate"] = bug_snap["resolution_rate"]
+        if density_snap and density_snap.get("by_project"):
+            # Replace DX-sourced list with Jira-sourced list (truth)
+            defect_by_project_results = [
+                {
+                    "project_name": r["name"],
+                    "total_issues": r["total_tickets"],
+                    "bug_count": r["bug_count"],
+                    "defect_density_pct": r["density_pct"],
+                }
+                for r in density_snap["by_project"]
+            ]
+            bug_metrics["defect_density"] = density_snap["overall_pct"]
+    except Exception as e:
+        logger.warning(f"Could not override DX qa-metrics from snapshot: {e}")
+
     # Parse AI tool usage
     ai_tool_usage_list = [
         AIToolUsage(**item) for item in ai_metrics.get("ai_tool_usage", [])

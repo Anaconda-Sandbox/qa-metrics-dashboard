@@ -20,6 +20,111 @@ BUG_METRIC_TYPES = ("total_bugs", "resolved_bugs", "open_bugs_canonical", "criti
 # Jira's, so we don't put RP project keys into the `project` column.
 RP_METRIC_TYPE = "rp_automation_health"
 
+# Jira-sourced per-project defect density. Single (None, quarter) row
+# carrying the full breakdown in extra_data.
+DEFECT_DENSITY_METRIC_TYPE = "defect_density_by_project"
+
+# Live QA roster from Jira's `QA` group. One row at (project=null,
+# quarter='ALL') because the roster is org-state, not quarter-scoped.
+QA_ROSTER_METRIC_TYPE = "qa_team_roster"
+
+
+async def snapshot_qa_roster() -> None:
+    """Refresh the QA team roster from Jira (active members of the 'QA' group)."""
+    db = SessionLocal()
+    try:
+        today = date.today()
+        members = await jira_service.get_qa_team_roster()
+        manager = None
+        try:
+            from app.services import dx_service
+            ti = await dx_service.get_team_info()
+            if ti:
+                manager = {"name": ti.manager_name, "email": ti.manager_email}
+        except Exception as e:
+            logger.warning(f"Could not fetch DX team lead while snapshotting roster: {e}")
+        _upsert_metric(
+            db, today, None, "ALL", QA_ROSTER_METRIC_TYPE,
+            float(len(members)),
+            extra_data={"members": members, "manager": manager},
+        )
+        db.commit()
+        logger.info(f"QA roster snapshot: {len(members)} members from Jira group, manager={(manager or {}).get('name','?')}")
+    except Exception as e:
+        logger.error(f"QA roster snapshot failed: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+def get_latest_qa_roster(db: Session) -> dict | None:
+    row = db.query(MetricSnapshot).filter(
+        MetricSnapshot.project.is_(None),
+        MetricSnapshot.quarter == "ALL",
+        MetricSnapshot.metric_type == QA_ROSTER_METRIC_TYPE,
+    ).order_by(MetricSnapshot.snapshot_date.desc(), MetricSnapshot.created_at.desc()).first()
+    if not row or not row.extra_data:
+        return None
+    return {
+        "members": (row.extra_data or {}).get("members") or [],
+        "manager": (row.extra_data or {}).get("manager"),
+        "count": int(row.value or 0),
+        "snapshot_date": row.snapshot_date.isoformat() if row.snapshot_date else None,
+    }
+
+
+async def snapshot_defect_density_for_quarter(quarter: str) -> None:
+    """Refresh per-project defect density (Jira API direct).
+
+    Writes a single MetricSnapshot row at (project=None, metric_type=
+    'defect_density_by_project'); extra_data carries the full per-project
+    list. The DX qa-metrics endpoint reads this and overrides DX Cloud's
+    undercount.
+    """
+    db = SessionLocal()
+    try:
+        today = date.today()
+        rows = await jira_service.get_defect_density_by_project(quarter=quarter)
+        # Aggregate: weighted density across all projects
+        total_tickets = sum(r["total_tickets"] for r in rows)
+        total_bugs = sum(r["bug_count"] for r in rows)
+        overall = round((total_bugs / total_tickets) * 100, 2) if total_tickets else 0.0
+        _upsert_metric(
+            db, today, None, quarter, DEFECT_DENSITY_METRIC_TYPE,
+            float(overall),
+            extra_data={
+                "overall_pct": overall,
+                "total_tickets": total_tickets,
+                "total_bugs": total_bugs,
+                "by_project": rows,
+            },
+        )
+        db.commit()
+        logger.info(f"Defect density snapshot {quarter}: overall={overall}% ({total_bugs}/{total_tickets} across {len(rows)} projects)")
+    except Exception as e:
+        logger.error(f"Defect density snapshot failed for {quarter}: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+def get_latest_defect_density(db: Session, quarter: str) -> dict | None:
+    """Read latest Jira-sourced defect density snapshot for the quarter."""
+    row = db.query(MetricSnapshot).filter(
+        MetricSnapshot.project.is_(None),
+        MetricSnapshot.quarter == quarter,
+        MetricSnapshot.metric_type == DEFECT_DENSITY_METRIC_TYPE,
+    ).order_by(MetricSnapshot.snapshot_date.desc(), MetricSnapshot.created_at.desc()).first()
+    if not row or not row.extra_data:
+        return None
+    return {
+        "overall_pct": (row.extra_data or {}).get("overall_pct", 0.0),
+        "total_tickets": (row.extra_data or {}).get("total_tickets", 0),
+        "total_bugs": (row.extra_data or {}).get("total_bugs", 0),
+        "by_project": (row.extra_data or {}).get("by_project") or [],
+        "snapshot_date": row.snapshot_date.isoformat() if row.snapshot_date else None,
+    }
+
 
 async def snapshot_qa_bug_metrics_for_quarter(quarter: str) -> None:
     """Refresh QA-team bug metrics for one quarter, every project + ALL.

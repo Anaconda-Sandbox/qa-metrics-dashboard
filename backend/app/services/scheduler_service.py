@@ -139,11 +139,16 @@ async def refresh_bug_metrics_snapshot():
     MetricSnapshot. Keeping this fresh (~hourly) means the dashboard read
     path is a Postgres lookup, not a Jira API call per request.
     """
-    from app.services.snapshot_service import snapshot_qa_bug_metrics_for_quarter
+    from app.services.snapshot_service import snapshot_qa_bug_metrics_for_quarter, snapshot_defect_density_for_quarter
     now = datetime.now()
     quarter = f"{now.year}-Q{(now.month - 1) // 3 + 1}"
     logger.info(f"Refreshing bug-metrics snapshot for {quarter}")
     await snapshot_qa_bug_metrics_for_quarter(quarter)
+    logger.info(f"Refreshing defect-density-by-project snapshot for {quarter}")
+    await snapshot_defect_density_for_quarter(quarter)
+    logger.info("Refreshing QA roster snapshot from Jira group")
+    from app.services.snapshot_service import snapshot_qa_roster
+    await snapshot_qa_roster()
 
 
 async def refresh_automation_metrics_snapshot():

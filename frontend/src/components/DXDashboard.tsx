@@ -265,9 +265,37 @@ export default function DXDashboard({ quarter }: Props) {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetch(`${API_BASE}/api/dx/dashboard?quarter=${quarter}`);
-        if (!response.ok) throw new Error("Failed to fetch DX data");
-        const result = await response.json();
+        // Fetch the DX dashboard payload and the Jira-sourced QA roster in parallel.
+        // The roster overrides team.members so we always show the full 19-member group
+        // from Jira, not whatever subset DX has ingested for the team.
+        const [dxResp, rosterResp] = await Promise.all([
+          fetch(`${API_BASE}/api/dx/dashboard?quarter=${quarter}`),
+          fetch(`${API_BASE}/api/members/qa-team`),
+        ]);
+        if (!dxResp.ok) throw new Error("Failed to fetch DX data");
+        const result = await dxResp.json();
+
+        if (rosterResp.ok) {
+          const roster = await rosterResp.json();
+          // Translate Jira roster → DX TeamInfo shape so the existing card renders unchanged
+          const members = (roster.members || []).map((m: { accountId?: string; displayName: string; email: string; github_handle: string | null }) => ({
+            id: m.accountId || m.email,
+            name: m.displayName,
+            email: m.email,
+            github_username: m.github_handle ?? null,
+            is_developer: false,
+          }));
+          const managerName = roster.manager?.name || result.team?.manager_name || "QA Team";
+          const managerEmail = roster.manager?.email || result.team?.manager_email || "";
+          result.team = {
+            id: result.team?.id || "qa-jira",
+            name: result.team?.name || "QA Team",
+            manager_name: managerName,
+            manager_email: managerEmail,
+            contributor_count: roster.count ?? members.length,
+            members,
+          };
+        }
         setData(result);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
@@ -819,7 +847,7 @@ export default function DXDashboard({ quarter }: Props) {
               </div>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-              {team.members.slice(0, 12).map((member) => (
+              {team.members.map((member) => (
                 <div key={member.id} className="flex items-center gap-3 p-3 rounded-xl bg-[var(--bg-overlay)] hover:bg-[var(--bg-surface)] transition-colors">
                   <div className="w-10 h-10 rounded-xl bg-[var(--bg-surface)] flex items-center justify-center text-xs font-semibold text-[var(--text-muted)]">
                     {member.name.split(" ").map(n => n[0]).join("")}
@@ -832,11 +860,6 @@ export default function DXDashboard({ quarter }: Props) {
                   </div>
                 </div>
               ))}
-              {team.members.length > 12 && (
-                <div className="flex items-center justify-center p-3 rounded-xl bg-[var(--bg-overlay)]">
-                  <span className="text-sm text-[var(--text-muted)]">+{team.members.length - 12} more</span>
-                </div>
-              )}
             </div>
           </div>
         </section>
