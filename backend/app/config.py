@@ -198,6 +198,9 @@ class Settings(BaseSettings):
     reportportal_base_url: str = ""
     reportportal_api_token: str = ""
     reportportal_project: str = "anaconda-qa"
+    reportportal_projects: str = ""  # Comma-separated list for aggregate metrics
+    cf_access_client_id: str = ""
+    cf_access_client_secret: str = ""
 
     github_token: str = ""
     github_org: str = "anaconda"

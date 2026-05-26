@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.database import SessionLocal, MetricSnapshot, WeeklyTrend, ReviewerHistory, StoryPointHistory
 from app.config import PROJECT_CONFIG
-from app.services import jira_service, github_service
+from app.services import jira_service, github_service, reportportal_service
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 # Bug-metrics snapshot keys. Stored per (project, quarter) in MetricSnapshot.
 # Read by dx_service._get_executive_bug_metrics for the leadership dashboard.
 BUG_METRIC_TYPES = ("total_bugs", "resolved_bugs", "open_bugs_canonical", "critical_bugs_canonical", "resolution_rate", "qa_fixed_count")
+
+# ReportPortal automation metrics — stored as a single MetricSnapshot row
+# per (None, quarter) carrying the overall numbers, with the per-project
+# breakdown serialized into extra_data. RP project namespace differs from
+# Jira's, so we don't put RP project keys into the `project` column.
+RP_METRIC_TYPE = "rp_automation_health"
 
 
 async def snapshot_qa_bug_metrics_for_quarter(quarter: str) -> None:
@@ -46,6 +52,68 @@ async def snapshot_qa_bug_metrics_for_quarter(quarter: str) -> None:
                 db.rollback()
     finally:
         db.close()
+
+
+async def snapshot_automation_metrics_for_quarter(quarter: str) -> None:
+    """Refresh ReportPortal automation metrics for one quarter.
+
+    Aggregates pass-rate / duration / flaky% across every RP project listed
+    in REPORTPORTAL_PROJECTS, writes one MetricSnapshot row carrying the
+    overall pass_rate as `value` and the full per-project breakdown in
+    `extra_data`. Read path goes through get_latest_automation_metrics().
+
+    Slow operation (RP API is paged, flaky calc walks /test-item) — keep
+    this on the hourly scheduler, not in the request path.
+    """
+    db = SessionLocal()
+    try:
+        today = date.today()
+        try:
+            data = await reportportal_service.get_automation_metrics_for_quarter(quarter, include_flaky=True)
+        except Exception as e:
+            logger.error(f"RP automation snapshot failed for {quarter}: {e}")
+            return
+
+        overall = data.get("overall") or {}
+        # value = overall pass rate (the single number used by the KPI tile)
+        # extra_data = full payload (overall + by_project) for the chart panels
+        _upsert_metric(
+            db, today, None, quarter, RP_METRIC_TYPE,
+            float(overall.get("pass_rate_pct") or 0.0),
+            extra_data={
+                "overall": overall,
+                "by_project": data.get("by_project") or [],
+            },
+        )
+        db.commit()
+        logger.info(
+            f"RP automation snapshot {quarter}: overall pass={overall.get('pass_rate_pct')}% "
+            f"projects={len(data.get('by_project') or [])} launches={overall.get('total_launches')}"
+        )
+    finally:
+        db.close()
+
+
+def get_latest_automation_metrics(db: Session, quarter: str) -> dict | None:
+    """Return the latest snapshot of RP automation metrics for the given quarter.
+
+    Returns None if no snapshot exists yet (caller should fall back to a live
+    fetch). Returns a dict matching reportportal_service.get_automation_metrics
+    shape: {quarter, overall, by_project}.
+    """
+    row = db.query(MetricSnapshot).filter(
+        MetricSnapshot.project.is_(None),
+        MetricSnapshot.quarter == quarter,
+        MetricSnapshot.metric_type == RP_METRIC_TYPE,
+    ).order_by(MetricSnapshot.snapshot_date.desc(), MetricSnapshot.created_at.desc()).first()
+    if not row or not row.extra_data:
+        return None
+    return {
+        "quarter": quarter,
+        "overall": (row.extra_data or {}).get("overall") or {},
+        "by_project": (row.extra_data or {}).get("by_project") or [],
+        "snapshot_date": row.snapshot_date.isoformat() if row.snapshot_date else None,
+    }
 
 
 def get_latest_bug_metrics(db: Session, project: str | None, quarter: str) -> dict | None:

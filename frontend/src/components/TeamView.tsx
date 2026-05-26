@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import {
   BarChart,
   Bar,
+  Cell,
   XAxis,
   YAxis,
   Tooltip,
@@ -11,6 +12,15 @@ import {
 } from "recharts";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
+
+interface AutomationProjectMetric {
+  project: string;
+  launches: number;
+  pass_rate_pct: number;
+  avg_duration_sec: number;
+  flaky_pct: number | null;
+  total_tests: number;
+}
 
 interface TeamData {
   team_contributions: Array<{ user_name: string; prs_opened: number; prs_merged: number }>;
@@ -28,6 +38,11 @@ interface TeamData {
     changes_requested: number;
     comments: number;
   }>;
+  automation_health: {
+    quarter: string;
+    overall: { pass_rate_pct: number; avg_duration_sec: number; total_launches: number; total_tests: number };
+    by_project: AutomationProjectMetric[];
+  } | null;
 }
 
 interface Props {
@@ -219,6 +234,121 @@ export default function TeamView({ quarter, project }: Props) {
           </Card>
         ) : (
           <Card className="text-center text-[var(--text-muted)]">No review activity for this quarter.</Card>
+        )}
+      </section>
+
+      {/* Automation Health (ReportPortal-sourced, branch=main only) */}
+      <section>
+        <SectionHeader
+          title="Automation Health"
+          badge="ReportPortal"
+          subtitle={data.automation_health
+            ? `${data.automation_health.overall.total_launches} launches · ${data.automation_health.overall.total_tests.toLocaleString()} tests · main branch`
+            : undefined}
+        />
+        {!data.automation_health || data.automation_health.by_project.length === 0 ? (
+          <Card className="text-center text-[var(--text-muted)] py-8">
+            Automation metrics are still being snapshotted. Refresh in a minute.
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Pass Rate per project */}
+            <Card>
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-[var(--text-primary)]">Pass Rate by Project</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-1">Target 90%</p>
+              </div>
+              <ResponsiveContainer width="100%" height={Math.max(280, data.automation_health.by_project.length * 28)}>
+                <BarChart
+                  data={data.automation_health.by_project.map((p) => ({ name: p.project, "Pass %": p.pass_rate_pct }))}
+                  layout="vertical"
+                  margin={{ left: 10, right: 30 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
+                  <XAxis type="number" domain={[0, 100]} stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                  <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
+                  <Tooltip {...tooltipStyle} />
+                  <Bar dataKey="Pass %" radius={[0, 4, 4, 0]}>
+                    {data.automation_health.by_project.map((p, idx) => (
+                      <Cell
+                        key={idx}
+                        fill={
+                          p.pass_rate_pct >= 90
+                            ? "var(--success-base)"
+                            : p.pass_rate_pct >= 75
+                            ? "var(--warning-base)"
+                            : "var(--error-base)"
+                        }
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+
+            {/* Avg Workflow Duration per project */}
+            <Card>
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-[var(--text-primary)]">Avg Workflow Duration</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-1">Minutes per launch</p>
+              </div>
+              <ResponsiveContainer width="100%" height={Math.max(280, data.automation_health.by_project.length * 28)}>
+                <BarChart
+                  data={[...data.automation_health.by_project]
+                    .sort((a, b) => b.avg_duration_sec - a.avg_duration_sec)
+                    .map((p) => ({ name: p.project, "Minutes": Math.round(p.avg_duration_sec / 60) }))}
+                  layout="vertical"
+                  margin={{ left: 10, right: 30 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
+                  <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                  <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
+                  <Tooltip {...tooltipStyle} />
+                  <Bar dataKey="Minutes" fill="var(--info-base)" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+
+            {/* Flaky Tests per project (only those with >=5 launches) */}
+            <Card>
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-[var(--text-primary)]">Flaky Tests by Project</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-1">% alternating pass/fail · projects with ≥5 launches</p>
+              </div>
+              {(() => {
+                const eligible = data.automation_health!.by_project.filter((p) => p.flaky_pct !== null);
+                if (eligible.length === 0) {
+                  return <div className="flex items-center justify-center h-[280px] text-[var(--text-muted)]">No projects with ≥5 launches yet</div>;
+                }
+                const sorted = [...eligible].sort((a, b) => (b.flaky_pct ?? 0) - (a.flaky_pct ?? 0));
+                return (
+                  <ResponsiveContainer width="100%" height={Math.max(280, sorted.length * 32)}>
+                    <BarChart
+                      data={sorted.map((p) => ({ name: p.project, "Flaky %": p.flaky_pct ?? 0 }))}
+                      layout="vertical"
+                      margin={{ left: 10, right: 30 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
+                      <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                      <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
+                      <Tooltip {...tooltipStyle} />
+                      <Bar dataKey="Flaky %" radius={[0, 4, 4, 0]}>
+                        {sorted.map((p, idx) => {
+                          const v = p.flaky_pct ?? 0;
+                          return (
+                            <Cell
+                              key={idx}
+                              fill={v <= 5 ? "var(--success-base)" : v <= 10 ? "var(--warning-base)" : "var(--error-base)"}
+                            />
+                          );
+                        })}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                );
+              })()}
+            </Card>
+          </div>
         )}
       </section>
     </div>

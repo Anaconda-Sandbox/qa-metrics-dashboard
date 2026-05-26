@@ -15,6 +15,28 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
+interface AutomationProjectMetric {
+  project: string;
+  launches: number;
+  pass_rate_pct: number;
+  avg_duration_sec: number;
+  flaky_pct: number | null;
+  total_tests: number;
+}
+
+interface AutomationHealth {
+  quarter: string;
+  overall: {
+    pass_rate_pct: number;
+    avg_duration_sec: number;
+    total_launches: number;
+    total_tests: number;
+    total_passed: number;
+  };
+  by_project: AutomationProjectMetric[];
+  snapshot_date?: string;
+}
+
 interface ExecutiveMetrics {
   open_bugs: number;
   resolved_bugs: number;
@@ -49,6 +71,7 @@ interface ExecutiveMetrics {
     changes_requested: number;
     comments: number;
   }>;
+  automation_health: AutomationHealth | null;
 }
 
 interface QAReportedBugs {
@@ -456,6 +479,14 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
             }
           />
           <KPICard
+            title="Pass Rate"
+            value={data.automation_health?.overall.pass_rate_pct ?? 0}
+            suffix="%"
+            description={`${data.automation_health?.overall.total_launches ?? 0} launches`}
+            trend={isComparing ? calculateTrend(data.automation_health?.overall.pass_rate_pct ?? 0, compareData?.automation_health?.overall.pass_rate_pct ?? undefined) : undefined}
+            color={(data.automation_health?.overall.pass_rate_pct ?? 0) >= 90 ? "success" : (data.automation_health?.overall.pass_rate_pct ?? 0) >= 75 ? "warning" : "error"}
+          />
+          <KPICard
             title="Story Points"
             scrollTo="velocity"
             value={Math.round(data.story_points_completed)}
@@ -594,6 +625,8 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           </Card>
         </div>
       </section>
+
+      {/* Automation Health detail lives on Team view; KPI tile (Pass Rate) summarizes here. */}
 
       {/* Review Activity Trend (aggregate weekly) */}
       <section id="review-activity" style={{ scrollMarginTop: "80px" }}>

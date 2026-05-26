@@ -146,6 +146,20 @@ async def refresh_bug_metrics_snapshot():
     await snapshot_qa_bug_metrics_for_quarter(quarter)
 
 
+async def refresh_automation_metrics_snapshot():
+    """Hourly: refresh ReportPortal automation metrics for the current quarter.
+
+    Aggregates pass rate / avg duration / flaky % across all RP projects.
+    RP API is slow (paged + per-launch /item lookups for flakiness), so this
+    must run in the background; the dashboard reads from MetricSnapshot.
+    """
+    from app.services.snapshot_service import snapshot_automation_metrics_for_quarter
+    now = datetime.now()
+    quarter = f"{now.year}-Q{(now.month - 1) // 3 + 1}"
+    logger.info(f"Refreshing RP automation-metrics snapshot for {quarter}")
+    await snapshot_automation_metrics_for_quarter(quarter)
+
+
 def start_scheduler():
     if not scheduler.running:
         # Run initial refresh after 30 seconds (let services initialize)
@@ -192,6 +206,24 @@ def start_scheduler():
             refresh_bug_metrics_snapshot,
             trigger=IntervalTrigger(hours=1),
             id="hourly_bug_metrics_snapshot",
+            max_instances=1,
+            replace_existing=True,
+        )
+
+        # ReportPortal automation-metrics snapshot: warm 90s after startup,
+        # then hourly. Slower than the bug snapshot — paginates RP launches
+        # across 12 projects and walks /test-item for flaky detection.
+        scheduler.add_job(
+            refresh_automation_metrics_snapshot,
+            trigger=DateTrigger(run_date=datetime.now() + timedelta(seconds=90)),
+            id="initial_automation_metrics_snapshot",
+            max_instances=1,
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            refresh_automation_metrics_snapshot,
+            trigger=IntervalTrigger(hours=1),
+            id="hourly_automation_metrics_snapshot",
             max_instances=1,
             replace_existing=True,
         )

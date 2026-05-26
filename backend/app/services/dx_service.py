@@ -1449,6 +1449,9 @@ class ExecutiveMetrics(BaseModel):
     velocity_trend: list[dict] = []
     review_trend: list[dict] = []
 
+    # Automation health (ReportPortal-sourced, snapshotted hourly)
+    automation_health: dict | None = None
+
     # Team breakdown
     team_contributions: list[dict] = []
     story_points_by_member: list[dict] = []
@@ -1891,6 +1894,34 @@ async def _get_executive_top_reviewers(start_date: str, end_date: str, project: 
     ]
 
 
+async def _get_automation_health(quarter: str) -> dict | None:
+    """Return RP automation metrics for the leadership dashboard.
+
+    Read path: latest snapshot in MetricSnapshot (refreshed hourly by the
+    scheduler). Falls back to a live RP fetch with `include_flaky=False`
+    so the dashboard doesn't pay the slow flaky-detection cost on a cold
+    cache; the next scheduler tick will fill in flaky_pct.
+    """
+    from app.database import SessionLocal
+    from app.services import snapshot_service
+
+    db = SessionLocal()
+    try:
+        snap = snapshot_service.get_latest_automation_metrics(db, quarter)
+    finally:
+        db.close()
+    if snap:
+        return snap
+
+    logger.info(f"RP automation snapshot missing for {quarter}; falling back to live RP fetch (no flaky)")
+    try:
+        from app.services import reportportal_service
+        return await reportportal_service.get_automation_metrics_for_quarter(quarter, include_flaky=False)
+    except Exception as e:
+        logger.error(f"Live RP fallback for automation metrics failed: {e}")
+        return None
+
+
 async def get_executive_dashboard_metrics(quarter: str, project: str | None = None) -> ExecutiveMetrics:
     """Get all executive dashboard metrics from DX Data Cloud.
 
@@ -1926,6 +1957,9 @@ async def get_executive_dashboard_metrics(quarter: str, project: str | None = No
     review_trend = results[8] if not isinstance(results[8], Exception) else []
     top_reviewers = results[9] if not isinstance(results[9], Exception) else []
 
+    # ReportPortal automation health — read from snapshot, fall back live.
+    automation_health = await _get_automation_health(quarter)
+
     return ExecutiveMetrics(
         # Quality
         open_bugs=bug_metrics.get("open_bugs", 0),
@@ -1952,6 +1986,7 @@ async def get_executive_dashboard_metrics(quarter: str, project: str | None = No
         pr_trend=pr_trend,
         velocity_trend=velocity_trend,
         review_trend=review_trend,
+        automation_health=automation_health,
 
         # Breakdowns
         team_contributions=team_contributions,
