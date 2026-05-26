@@ -535,13 +535,15 @@ select {
    ============================================================================= */
 
 .glass {
-  background: rgba(15, 20, 25, 0.8);
+  /* Opaque so scrolled content doesn't show through and overlap the header
+     (was rgba 0.8 which produced a translucent overlap with section headings). */
+  background: var(--bg-base);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
 }
 
 [data-theme="light"] .glass {
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--bg-base);
 }
 
 /* =============================================================================

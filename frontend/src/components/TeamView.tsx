@@ -170,11 +170,11 @@ export default function TeamView({ quarter, project }: Props) {
         <SectionHeader title="PR Contributions" badge="Code Activity" subtitle={`${data.team_contributions.length} active members`} />
         {data.team_contributions.length > 0 ? (
           <Card>
-            <ResponsiveContainer width="100%" height={Math.max(300, data.team_contributions.length * 35)}>
+            <ResponsiveContainer width="100%" height={Math.max(320, data.team_contributions.length * 40)}>
               <BarChart data={data.team_contributions} layout="vertical" margin={{ left: 10, right: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
                 <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
-                <YAxis type="category" dataKey="user_name" stroke="var(--text-muted)" fontSize={11} width={140} tickLine={false} />
+                <YAxis type="category" dataKey="user_name" stroke="var(--text-muted)" fontSize={11} width={180} tickLine={false} interval={0} />
                 <Tooltip {...tooltipStyle} />
                 <Legend wrapperStyle={{ fontSize: "12px" }} />
                 <Bar dataKey="prs_opened" name="Opened" fill="var(--chart-1)" radius={[0, 4, 4, 0]} />
