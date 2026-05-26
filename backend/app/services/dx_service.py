@@ -1613,15 +1613,21 @@ async def _get_executive_pr_metrics(start_date: str, end_date: str, project: str
       AND pr.bot_authored = false{pr_repo_where}
     """
 
+    # Count distinct (PR, reviewer) pairs rather than every review event.
+    # Otherwise multiple COMMENT actions by the same reviewer on the same PR
+    # each inflate the count — this conflates "left a comment" with "reviewed a PR".
     review_sql = f"""
     SELECT COUNT(*) as total_reviews
-    FROM pull_request_reviews prr
-    JOIN dx_users du ON prr.dx_user_id = du.id
-    JOIN dx_teams dt ON du.team_id = dt.id{rev_repo_join}
-    WHERE dt.source_id = '{QA_TEAM_ID}'
-      AND prr.created >= '{start_date}'
-      AND prr.created < '{end_date}'
-      AND prr.bot_authored = false{rev_repo_where}
+    FROM (
+      SELECT DISTINCT prr.pull_request_id, prr.dx_user_id
+      FROM pull_request_reviews prr
+      JOIN dx_users du ON prr.dx_user_id = du.id
+      JOIN dx_teams dt ON du.team_id = dt.id{rev_repo_join}
+      WHERE dt.source_id = '{QA_TEAM_ID}'
+        AND prr.created >= '{start_date}'
+        AND prr.created < '{end_date}'
+        AND prr.bot_authored = false{rev_repo_where}
+    ) AS distinct_reviews
     """
 
     pr_results, review_results = await asyncio.gather(
@@ -1815,18 +1821,24 @@ async def _get_executive_review_trend(start_date: str, end_date: str, project: s
     repo_join = ""
     if repo_join_inner:
         repo_join = " JOIN pull_requests rev_pr ON prr.pull_request_id = rev_pr.id" + repo_join_inner
+    # Same DISTINCT (PR, reviewer) treatment as total_reviews — count one
+    # review per (PR, reviewer) pair per week, not every comment event.
     sql = f"""
-    SELECT
-        DATE_TRUNC('week', prr.created)::date as week,
-        COUNT(*) as reviews
-    FROM pull_request_reviews prr
-    JOIN dx_users du ON prr.dx_user_id = du.id
-    JOIN dx_teams dt ON du.team_id = dt.id{repo_join}
-    WHERE dt.source_id = '{QA_TEAM_ID}'
-      AND prr.created >= '{start_date}'
-      AND prr.created < '{end_date}'
-      AND prr.bot_authored = false{repo_where}
-    GROUP BY DATE_TRUNC('week', prr.created)
+    SELECT week, COUNT(*) AS reviews
+    FROM (
+      SELECT DISTINCT
+        DATE_TRUNC('week', prr.created)::date AS week,
+        prr.pull_request_id,
+        prr.dx_user_id
+      FROM pull_request_reviews prr
+      JOIN dx_users du ON prr.dx_user_id = du.id
+      JOIN dx_teams dt ON du.team_id = dt.id{repo_join}
+      WHERE dt.source_id = '{QA_TEAM_ID}'
+        AND prr.created >= '{start_date}'
+        AND prr.created < '{end_date}'
+        AND prr.bot_authored = false{repo_where}
+    ) AS distinct_reviews
+    GROUP BY week
     ORDER BY week
     """
 

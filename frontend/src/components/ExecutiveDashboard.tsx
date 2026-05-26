@@ -114,6 +114,7 @@ function KPICard({
   color = "primary",
   loading = false,
   scrollTo,
+  tooltip,
 }: {
   title: string;
   value: number | string;
@@ -124,6 +125,7 @@ function KPICard({
   color?: "primary" | "success" | "warning" | "error" | "info";
   loading?: boolean;
   scrollTo?: string;
+  tooltip?: string;
 }) {
   const colorMap = {
     primary: { bg: "var(--accent-primary)", subtle: "rgba(99, 102, 241, 0.1)" },
@@ -158,9 +160,24 @@ function KPICard({
 
   const inner = (
     <>
-      <div className="flex items-start justify-between mb-3">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+      <div className="flex items-start justify-between mb-3 gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
           {title}
+          {tooltip && (
+            <span
+              className="relative inline-flex items-center group/tip"
+              tabIndex={0}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <svg className="w-3 h-3 text-[var(--text-muted)] hover:text-[var(--accent-primary)] cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-label="More info">
+                <circle cx="12" cy="12" r="10" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 16v-4M12 8h.01" />
+              </svg>
+              <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 p-2 rounded-md text-[10px] font-normal normal-case tracking-normal bg-[var(--bg-elevated)] border border-[var(--border-emphasis)] text-[var(--text-secondary)] shadow-xl opacity-0 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 transition-opacity z-50">
+                {tooltip}
+              </span>
+            </span>
+          )}
         </span>
         {interactive && (
           <svg
@@ -403,10 +420,12 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
             suffix=" Projects"
             description="24 dedicated + 4 support"
             color="info"
+            tooltip="Total number of projects under QA coverage. Dedicated = QA owns the test plan; Support = QA assists when needed."
           />
           <KPICard
             title="QA-Reported Bugs"
             scrollTo="quality-metrics"
+            tooltip='Bugs created in this quarter where the reporter or creator is in the QA Jira group. "High priority" sub-count = priority Highest or High (Jira has no "Critical" value).'
             value={bugsData?.total ?? data.open_bugs}
             description={`${bugsData?.critical ?? data.critical_bugs} high priority`}
             trend={
@@ -423,6 +442,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <KPICard
             title="Resolution Rate"
             scrollTo="quality-metrics"
+            tooltip="Of bugs reported by QA in this quarter, the % that have been resolved (resolutiondate set). Tracks the in-flight quality of new reports — bugs reported in earlier quarters and resolved here are not counted."
             value={data.bug_resolution_rate ?? 0}
             suffix="%"
             description="Bugs resolved"
@@ -432,6 +452,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <KPICard
             title="Bugs Fixed by QA"
             scrollTo="quality-metrics"
+            tooltip='Tickets carrying the "qa-fixed" label that were updated this quarter. The QA team applies this label to bugs they found and fixed themselves (often QA-reported, frequently QA-assigned).'
             value={data.bugs_fixed_by_qa}
             description={`qa-fixed in ${periodLabel}`}
             trend={isComparing ? calculateTrend(data.bugs_fixed_by_qa, compareData?.bugs_fixed_by_qa) : undefined}
@@ -440,6 +461,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <KPICard
             title="Total PRs"
             scrollTo="quality-metrics"
+            tooltip="Pull requests opened by the QA team in this quarter. Excludes bot-authored PRs. Source: DX Data Cloud (GitHub data via DX)."
             value={data.prs_opened}
             description={periodLabel}
             trend={isComparing ? calculateTrend(data.prs_opened, compareData?.prs_opened) : undefined}
@@ -448,6 +470,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <KPICard
             title="Total Merges"
             scrollTo="quality-metrics"
+            tooltip="Pull requests opened in this quarter that have a merged timestamp. Excludes bot-authored PRs."
             value={data.prs_merged}
             description={periodLabel}
             trend={isComparing ? calculateTrend(data.prs_merged, compareData?.prs_merged) : undefined}
@@ -456,6 +479,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <KPICard
             title="Avg Merge Time"
             scrollTo="quality-metrics"
+            tooltip="Average hours from PR open to merge across QA-team PRs in this quarter. Excludes bot PRs and unmerged PRs. Color-graded: ≤24h green, ≤72h amber, else red."
             value={data.avg_pr_merge_time_hours ? Math.round(data.avg_pr_merge_time_hours) : 0}
             suffix="h"
             description="Open to merge"
@@ -480,6 +504,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           />
           <KPICard
             title="Pass Rate"
+            tooltip="Overall ReportPortal test pass rate this quarter, weighted across all projects. Counts only branch=main launches (excludes feature-branch noise). Target 90%."
             value={data.automation_health?.overall.pass_rate_pct ?? 0}
             suffix="%"
             description={`${data.automation_health?.overall.total_launches ?? 0} launches`}
@@ -489,6 +514,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <KPICard
             title="Story Points"
             scrollTo="velocity"
+            tooltip="Story points completed by the QA team this quarter. Sub-count shows points still in-progress. Source: Jira via DX."
             value={Math.round(data.story_points_completed)}
             description={`${Math.round(data.story_points_in_progress)} in progress`}
             trend={isComparing ? calculateTrend(data.story_points_completed, compareData?.story_points_completed) : undefined}
@@ -497,6 +523,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <KPICard
             title="Reviews"
             scrollTo="review-activity"
+            tooltip='Distinct (PR, reviewer) pairs in this quarter — i.e. how many times a QA reviewer touched a PR. A reviewer who comments three times on the same PR counts once. Excludes bot reviews.'
             value={data.total_reviews}
             description={periodLabel}
             trend={isComparing ? calculateTrend(data.total_reviews, compareData?.total_reviews) : undefined}
@@ -505,6 +532,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <KPICard
             title="Tickets Done"
             scrollTo="velocity"
+            tooltip="Jira tickets the QA team resolved this quarter (any type, not just bugs)."
             value={data.tickets_completed}
             description={periodLabel}
             trend={isComparing ? calculateTrend(data.tickets_completed, compareData?.tickets_completed) : undefined}
@@ -516,21 +544,8 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
       {/* Velocity Section */}
       <section id="velocity" style={{ scrollMarginTop: "80px" }}>
         <SectionHeader title="Velocity & Delivery" badge="Quarterly" />
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          <div className="lg:col-span-1 space-y-4">
-            <Card className="text-center">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">Completed</p>
-              <p className="text-4xl font-bold text-[var(--success-base)]">{Math.round(data.story_points_completed)}</p>
-              <p className="text-xs text-[var(--text-muted)] mt-1">story points</p>
-            </Card>
-            <Card className="text-center">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">In Progress</p>
-              <p className="text-4xl font-bold text-[var(--warning-base)]">{Math.round(data.story_points_in_progress)}</p>
-              <p className="text-xs text-[var(--text-muted)] mt-1">story points</p>
-            </Card>
-          </div>
-
-          <Card className="lg:col-span-4">
+        <div className="grid grid-cols-1 gap-6">
+          <Card>
             <div className="mb-4">
               <h3 className="text-base font-semibold text-[var(--text-primary)]">Weekly Velocity Trend</h3>
               <p className="text-xs text-[var(--text-muted)] mt-1">Story points completed per week</p>

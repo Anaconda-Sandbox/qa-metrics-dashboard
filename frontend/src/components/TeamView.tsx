@@ -50,6 +50,79 @@ interface Props {
   project: string;
 }
 
+// Build a project-name → metric lookup for richer chart tooltips.
+function makeMetricLookup(items: AutomationProjectMetric[]): Record<string, AutomationProjectMetric> {
+  const m: Record<string, AutomationProjectMetric> = {};
+  for (const it of items) m[it.project] = it;
+  return m;
+}
+
+// Recharts' Tooltip `content` prop is typed loosely; treat it as any
+// and pull project name from payload[0].payload.name.
+const tipBoxStyle: React.CSSProperties = {
+  backgroundColor: "rgba(15, 20, 25, 0.95)",
+  border: "1px solid rgba(71, 85, 105, 0.3)",
+  borderRadius: 12,
+  padding: "12px 16px",
+  boxShadow: "0 10px 40px rgba(0,0,0,0.5)",
+  fontSize: 12,
+};
+
+function makePassRateTooltip(lookup: Record<string, AutomationProjectMetric>) {
+  return (props: any) => {
+    const { active, payload } = props || {};
+    if (!active || !payload?.length) return null;
+    const name = payload[0]?.payload?.name;
+    const m = name ? lookup[name] : undefined;
+    if (!m) return null;
+    return (
+      <div style={tipBoxStyle}>
+        <div style={{ color: "#F1F5F9", fontWeight: 600, marginBottom: 6 }}>{m.project}</div>
+        <div style={{ color: "var(--success-base)", fontWeight: 700 }}>{m.pass_rate_pct.toFixed(2)}% pass rate</div>
+        <div style={{ color: "#94a3b8", marginTop: 4 }}>{m.launches} launches · {m.total_tests.toLocaleString()} tests</div>
+      </div>
+    );
+  };
+}
+
+function makeDurationTooltip(lookup: Record<string, AutomationProjectMetric>) {
+  return (props: any) => {
+    const { active, payload } = props || {};
+    if (!active || !payload?.length) return null;
+    const name = payload[0]?.payload?.name;
+    const m = name ? lookup[name] : undefined;
+    if (!m) return null;
+    const minutes = Math.round(m.avg_duration_sec / 60);
+    const hours = m.avg_duration_sec >= 3600 ? `${(m.avg_duration_sec / 3600).toFixed(1)}h` : null;
+    return (
+      <div style={tipBoxStyle}>
+        <div style={{ color: "#F1F5F9", fontWeight: 600, marginBottom: 6 }}>{m.project}</div>
+        <div style={{ color: "var(--info-base)", fontWeight: 700 }}>{minutes} min{hours ? ` · ${hours}` : ""} avg</div>
+        <div style={{ color: "#94a3b8", marginTop: 4 }}>across {m.launches} launches</div>
+      </div>
+    );
+  };
+}
+
+function makeFlakyTooltip(lookup: Record<string, AutomationProjectMetric>) {
+  return (props: any) => {
+    const { active, payload } = props || {};
+    if (!active || !payload?.length) return null;
+    const name = payload[0]?.payload?.name;
+    const m = name ? lookup[name] : undefined;
+    if (!m || m.flaky_pct === null) return null;
+    const v = m.flaky_pct;
+    const color = v <= 5 ? "var(--success-base)" : v <= 10 ? "var(--warning-base)" : "var(--error-base)";
+    return (
+      <div style={tipBoxStyle}>
+        <div style={{ color: "#F1F5F9", fontWeight: 600, marginBottom: 6 }}>{m.project}</div>
+        <div style={{ color, fontWeight: 700 }}>{v.toFixed(2)}% flaky</div>
+        <div style={{ color: "#94a3b8", marginTop: 4 }}>tests alternating pass/fail · {m.launches} launches sampled</div>
+      </div>
+    );
+  };
+}
+
 const tooltipStyle = {
   contentStyle: {
     backgroundColor: "rgba(15, 20, 25, 0.95)",
@@ -157,8 +230,8 @@ export default function TeamView({ quarter, project }: Props) {
                     <th className="text-left py-3 px-4 text-[var(--text-muted)] font-medium">Member</th>
                     <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Completed</th>
                     <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">In Progress</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Total Issues</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Issues Done</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Total Tickets</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Tickets Done</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -258,32 +331,37 @@ export default function TeamView({ quarter, project }: Props) {
                 <h3 className="text-base font-semibold text-[var(--text-primary)]">Pass Rate by Project</h3>
                 <p className="text-xs text-[var(--text-muted)] mt-1">Target 90%</p>
               </div>
-              <ResponsiveContainer width="100%" height={Math.max(280, data.automation_health.by_project.length * 28)}>
-                <BarChart
-                  data={data.automation_health.by_project.map((p) => ({ name: p.project, "Pass %": p.pass_rate_pct }))}
-                  layout="vertical"
-                  margin={{ left: 10, right: 30 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
-                  <XAxis type="number" domain={[0, 100]} stroke="var(--text-muted)" fontSize={11} tickLine={false} />
-                  <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
-                  <Tooltip {...tooltipStyle} />
-                  <Bar dataKey="Pass %" radius={[0, 4, 4, 0]}>
-                    {data.automation_health.by_project.map((p, idx) => (
-                      <Cell
-                        key={idx}
-                        fill={
-                          p.pass_rate_pct >= 90
-                            ? "var(--success-base)"
-                            : p.pass_rate_pct >= 75
-                            ? "var(--warning-base)"
-                            : "var(--error-base)"
-                        }
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              {(() => {
+                const lookup = makeMetricLookup(data.automation_health!.by_project);
+                return (
+                  <ResponsiveContainer width="100%" height={Math.max(280, data.automation_health!.by_project.length * 28)}>
+                    <BarChart
+                      data={data.automation_health!.by_project.map((p) => ({ name: p.project, "Pass %": p.pass_rate_pct }))}
+                      layout="vertical"
+                      margin={{ left: 10, right: 30 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
+                      <XAxis type="number" domain={[0, 100]} stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                      <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
+                      <Tooltip content={makePassRateTooltip(lookup)} cursor={{ fill: "var(--bg-overlay)" }} />
+                      <Bar dataKey="Pass %" radius={[0, 4, 4, 0]}>
+                        {data.automation_health!.by_project.map((p, idx) => (
+                          <Cell
+                            key={idx}
+                            fill={
+                              p.pass_rate_pct >= 90
+                                ? "var(--success-base)"
+                                : p.pass_rate_pct >= 75
+                                ? "var(--warning-base)"
+                                : "var(--error-base)"
+                            }
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                );
+              })()}
             </Card>
 
             {/* Avg Workflow Duration per project */}
@@ -292,21 +370,26 @@ export default function TeamView({ quarter, project }: Props) {
                 <h3 className="text-base font-semibold text-[var(--text-primary)]">Avg Workflow Duration</h3>
                 <p className="text-xs text-[var(--text-muted)] mt-1">Minutes per launch</p>
               </div>
-              <ResponsiveContainer width="100%" height={Math.max(280, data.automation_health.by_project.length * 28)}>
-                <BarChart
-                  data={[...data.automation_health.by_project]
-                    .sort((a, b) => b.avg_duration_sec - a.avg_duration_sec)
-                    .map((p) => ({ name: p.project, "Minutes": Math.round(p.avg_duration_sec / 60) }))}
-                  layout="vertical"
-                  margin={{ left: 10, right: 30 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
-                  <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
-                  <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
-                  <Tooltip {...tooltipStyle} />
-                  <Bar dataKey="Minutes" fill="var(--info-base)" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              {(() => {
+                const lookup = makeMetricLookup(data.automation_health!.by_project);
+                return (
+                  <ResponsiveContainer width="100%" height={Math.max(280, data.automation_health!.by_project.length * 28)}>
+                    <BarChart
+                      data={[...data.automation_health!.by_project]
+                        .sort((a, b) => b.avg_duration_sec - a.avg_duration_sec)
+                        .map((p) => ({ name: p.project, "Minutes": Math.round(p.avg_duration_sec / 60) }))}
+                      layout="vertical"
+                      margin={{ left: 10, right: 30 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
+                      <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                      <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
+                      <Tooltip content={makeDurationTooltip(lookup)} cursor={{ fill: "var(--bg-overlay)" }} />
+                      <Bar dataKey="Minutes" fill="var(--info-base)" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                );
+              })()}
             </Card>
 
             {/* Flaky Tests per project (only those with >=5 launches) */}
@@ -321,6 +404,7 @@ export default function TeamView({ quarter, project }: Props) {
                   return <div className="flex items-center justify-center h-[280px] text-[var(--text-muted)]">No projects with ≥5 launches yet</div>;
                 }
                 const sorted = [...eligible].sort((a, b) => (b.flaky_pct ?? 0) - (a.flaky_pct ?? 0));
+                const lookup = makeMetricLookup(data.automation_health!.by_project);
                 return (
                   <ResponsiveContainer width="100%" height={Math.max(280, sorted.length * 32)}>
                     <BarChart
@@ -329,9 +413,9 @@ export default function TeamView({ quarter, project }: Props) {
                       margin={{ left: 10, right: 30 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
-                      <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                      <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} unit="%" />
                       <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
-                      <Tooltip {...tooltipStyle} />
+                      <Tooltip content={makeFlakyTooltip(lookup)} cursor={{ fill: "var(--bg-overlay)" }} />
                       <Bar dataKey="Flaky %" radius={[0, 4, 4, 0]}>
                         {sorted.map((p, idx) => {
                           const v = p.flaky_pct ?? 0;

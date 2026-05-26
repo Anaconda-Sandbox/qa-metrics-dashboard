@@ -129,7 +129,8 @@ function MetricCard({
   subtitle,
   trend,
   icon,
-  variant = "default"
+  variant = "default",
+  tooltip,
 }: {
   label: string;
   value: number | string | null;
@@ -138,6 +139,7 @@ function MetricCard({
   trend?: number | null;
   icon?: React.ReactNode;
   variant?: "default" | "success" | "warning" | "error" | "accent";
+  tooltip?: string;
 }) {
   const variantClasses = {
     default: "",
@@ -158,8 +160,19 @@ function MetricCard({
   return (
     <div className={`card metric-card card-glow ${variantClasses[variant]}`}>
       <div className="flex items-start justify-between">
-        <span className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+        <span className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider flex items-center gap-1.5">
           {label}
+          {tooltip && (
+            <span className="relative inline-flex items-center group/tip" tabIndex={0}>
+              <svg className="w-3 h-3 text-[var(--text-muted)] hover:text-[var(--accent-primary)] cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-label="More info">
+                <circle cx="12" cy="12" r="10" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 16v-4M12 8h.01" />
+              </svg>
+              <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 p-2 rounded-md text-[10px] font-normal normal-case tracking-normal bg-[var(--bg-elevated)] border border-[var(--border-emphasis)] text-[var(--text-secondary)] shadow-xl opacity-0 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 transition-opacity z-50">
+                {tooltip}
+              </span>
+            </span>
+          )}
         </span>
         {icon && (
           <div className="w-8 h-8 rounded-lg bg-[var(--bg-overlay)] flex items-center justify-center">
@@ -682,7 +695,7 @@ export default function DXDashboard({ quarter }: Props) {
                       <span className="text-sm font-medium text-[var(--text-primary)]">{project.project_name}</span>
                       <div className="flex items-center gap-4 text-xs">
                         <span className="text-[var(--text-muted)]">
-                          {project.bug_count} bugs / {project.total_issues} issues
+                          {project.bug_count} bugs / {project.total_issues} tickets
                         </span>
                         <span
                           className="font-bold px-2 py-0.5 rounded"
@@ -728,8 +741,28 @@ export default function DXDashboard({ quarter }: Props) {
                     <th className="text-left text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">Metric</th>
                     <th className="text-left text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">Type</th>
                     <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">Score</th>
-                    <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">vs Prev</th>
-                    <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">vs Org</th>
+                    <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">
+                      <span className="relative inline-flex items-center gap-1.5 group/tip" tabIndex={0}>
+                        vs Prev
+                        <svg className="w-3 h-3 cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <circle cx="12" cy="12" r="10" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 16v-4M12 8h.01" />
+                        </svg>
+                        <span className="pointer-events-none absolute bottom-full right-0 mb-2 w-56 p-2 rounded-md text-[10px] font-normal normal-case tracking-normal bg-[var(--bg-elevated)] border border-[var(--border-emphasis)] text-[var(--text-secondary)] shadow-xl opacity-0 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 transition-opacity z-50">
+                          Change vs the QA team's score in the previous DX survey snapshot. +4 means this score went up 4 points since last quarter.
+                        </span>
+                      </span>
+                    </th>
+                    <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">
+                      <span className="relative inline-flex items-center gap-1.5 group/tip" tabIndex={0}>
+                        vs Org
+                        <svg className="w-3 h-3 cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <circle cx="12" cy="12" r="10" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 16v-4M12 8h.01" />
+                        </svg>
+                        <span className="pointer-events-none absolute bottom-full right-0 mb-2 w-56 p-2 rounded-md text-[10px] font-normal normal-case tracking-normal bg-[var(--bg-elevated)] border border-[var(--border-emphasis)] text-[var(--text-secondary)] shadow-xl opacity-0 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 transition-opacity z-50">
+                          Difference from Anaconda's org-wide median for this metric. +5 means QA scores 5 points higher than the company average.
+                        </span>
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border-subtle)]">
