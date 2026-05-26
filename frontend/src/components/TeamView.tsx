@@ -298,7 +298,11 @@ export default function TeamView({ quarter, project }: Props) {
 
       {/* Top Reviewers — per-person review breakdown */}
       <section>
-        <SectionHeader title="Top Reviewers" badge="Code Reviews" subtitle="Distinct PRs reviewed · approvals/changes/comments breakdown" />
+        <SectionHeader
+          title="Top Reviewers"
+          badge="Code Reviews"
+          subtitle="Distinct PRs reviewed · approvals/changes/comments breakdown · sourced from DX (validated within ~10% of GitHub direct)"
+        />
         {data.top_reviewers && data.top_reviewers.length > 0 ? (
           <Card>
             <div className="overflow-x-auto">
