@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import InfoTip from "./InfoTip";
 import {
   AreaChart,
   Area,
@@ -163,21 +164,7 @@ function KPICard({
       <div className="flex items-start justify-between mb-3 gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
           {title}
-          {tooltip && (
-            <span
-              className="relative inline-flex items-center group/tip"
-              tabIndex={0}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <svg className="w-3 h-3 text-[var(--text-muted)] hover:text-[var(--accent-primary)] cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-label="More info">
-                <circle cx="12" cy="12" r="10" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 16v-4M12 8h.01" />
-              </svg>
-              <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 p-2 rounded-md text-[10px] font-normal normal-case tracking-normal bg-[var(--bg-elevated)] border border-[var(--border-emphasis)] text-[var(--text-secondary)] shadow-xl opacity-0 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 transition-opacity z-50">
-                {tooltip}
-              </span>
-            </span>
-          )}
+          {tooltip && <InfoTip>{tooltip}</InfoTip>}
         </span>
         {interactive && (
           <svg

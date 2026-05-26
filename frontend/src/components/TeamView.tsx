@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import InfoTip from "./InfoTip";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -30,13 +31,6 @@ interface TeamData {
     in_progress_points: number;
     total_issues: number;
     issues_completed: number;
-  }>;
-  top_reviewers: Array<{
-    user_name: string;
-    reviews_given: number;
-    approvals: number;
-    changes_requested: number;
-    comments: number;
   }>;
   automation_health: {
     quarter: string;
@@ -228,10 +222,30 @@ export default function TeamView({ quarter, project }: Props) {
                 <thead>
                   <tr className="border-b border-[var(--border-subtle)]">
                     <th className="text-left py-3 px-4 text-[var(--text-muted)] font-medium">Member</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Completed</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">In Progress</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Total Tickets</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Tickets Done</th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">
+                      <span className="inline-flex items-center gap-1.5 justify-center">
+                        Completed
+                        <InfoTip>Story points completed (assigned tickets resolved this quarter).</InfoTip>
+                      </span>
+                    </th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">
+                      <span className="inline-flex items-center gap-1.5 justify-center">
+                        In Progress
+                        <InfoTip>Story points on tickets currently in progress (status not Done, not Closed).</InfoTip>
+                      </span>
+                    </th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">
+                      <span className="inline-flex items-center gap-1.5 justify-center">
+                        Total Tickets
+                        <InfoTip>All tickets assigned to this member that touched the quarter (created or resolved within Q).</InfoTip>
+                      </span>
+                    </th>
+                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">
+                      <span className="inline-flex items-center gap-1.5 justify-center">
+                        Tickets Done
+                        <InfoTip>Tickets this member resolved this quarter (resolutiondate set).</InfoTip>
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -272,41 +286,6 @@ export default function TeamView({ quarter, project }: Props) {
           </Card>
         ) : (
           <Card className="text-center text-[var(--text-muted)]">No PR activity for this quarter.</Card>
-        )}
-      </section>
-
-      {/* Top Reviewers */}
-      <section>
-        <SectionHeader title="Top Reviewers" badge="Code Reviews" subtitle="Code review activity breakdown" />
-        {data.top_reviewers.length > 0 ? (
-          <Card>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--border-subtle)]">
-                    <th className="text-left py-3 px-4 text-[var(--text-muted)] font-medium">Reviewer</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Total</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Approved</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Changes</th>
-                    <th className="text-center py-3 px-4 text-[var(--text-muted)] font-medium">Comments</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.top_reviewers.map((r) => (
-                    <tr key={r.user_name} className="border-b border-[var(--border-subtle)]/40 hover:bg-[var(--bg-surface)]/50 transition-colors">
-                      <td className="py-3 px-4 font-medium text-[var(--text-primary)]">{r.user_name}</td>
-                      <td className="text-center py-3 px-4 text-[var(--info-base)] font-semibold">{r.reviews_given}</td>
-                      <td className="text-center py-3 px-4 text-[var(--success-base)]">{r.approvals}</td>
-                      <td className="text-center py-3 px-4 text-[var(--warning-base)]">{r.changes_requested}</td>
-                      <td className="text-center py-3 px-4 text-[var(--text-tertiary)]">{r.comments}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        ) : (
-          <Card className="text-center text-[var(--text-muted)]">No review activity for this quarter.</Card>
         )}
       </section>
 

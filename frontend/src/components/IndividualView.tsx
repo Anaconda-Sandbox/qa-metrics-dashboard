@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import axios from "axios";
 import { API_BASE_URL } from "../config";
+import InfoTip from "./InfoTip";
 
 const api = axios.create({ baseURL: API_BASE_URL });
 
@@ -170,19 +171,31 @@ export default function IndividualView() {
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div className="rounded-xl bg-[#1e293b]/40 border border-[#334155]/40 p-4 text-center">
                 <p className="text-2xl font-bold text-indigo-400">{activity.stats?.prs_opened ?? 0}</p>
-                <p className="text-[11px] text-[#64748b] mt-1">PRs Opened</p>
+                <p className="text-[11px] text-[#64748b] mt-1 inline-flex items-center justify-center gap-1.5">
+                  PRs Opened
+                  <InfoTip>Pull requests this person opened in the selected window. Excludes bot PRs.</InfoTip>
+                </p>
               </div>
               <div className="rounded-xl bg-[#1e293b]/40 border border-[#334155]/40 p-4 text-center">
                 <p className="text-2xl font-bold text-emerald-400">{activity.stats?.prs_merged ?? 0}</p>
-                <p className="text-[11px] text-[#64748b] mt-1">PRs Merged</p>
+                <p className="text-[11px] text-[#64748b] mt-1 inline-flex items-center justify-center gap-1.5">
+                  PRs Merged
+                  <InfoTip>Subset of PRs Opened that were eventually merged.</InfoTip>
+                </p>
               </div>
               <div className="rounded-xl bg-[#1e293b]/40 border border-[#334155]/40 p-4 text-center">
                 <p className="text-2xl font-bold text-cyan-400">{activity.stats?.prs_reviewed ?? 0}</p>
-                <p className="text-[11px] text-[#64748b] mt-1">PRs Reviewed</p>
+                <p className="text-[11px] text-[#64748b] mt-1 inline-flex items-center justify-center gap-1.5">
+                  PRs Reviewed
+                  <InfoTip>Distinct PRs (from anyone) where this person submitted at least one review action.</InfoTip>
+                </p>
               </div>
               <div className="rounded-xl bg-[#1e293b]/40 border border-[#334155]/40 p-4 text-center">
                 <p className="text-2xl font-bold text-amber-400">{activity.jira_total ?? 0}</p>
-                <p className="text-[11px] text-[#64748b] mt-1">Jira Tickets Active</p>
+                <p className="text-[11px] text-[#64748b] mt-1 inline-flex items-center justify-center gap-1.5">
+                  Jira Tickets Active
+                  <InfoTip>Open Jira tickets currently assigned to this person across all projects.</InfoTip>
+                </p>
               </div>
               <div className="rounded-xl bg-[#1e293b]/40 border border-[#334155]/40 p-4 text-center">
                 <div className="flex flex-wrap justify-center gap-1">
@@ -192,7 +205,10 @@ export default function IndividualView() {
                     </span>
                   ))}
                 </div>
-                <p className="text-[11px] text-[#64748b] mt-1">Jira by Type</p>
+                <p className="text-[11px] text-[#64748b] mt-1 inline-flex items-center justify-center gap-1.5">
+                  Jira by Type
+                  <InfoTip>Open tickets broken down by issue type (Bug / Story / Task / etc.).</InfoTip>
+                </p>
               </div>
             </div>
           </div>

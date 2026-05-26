@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import InfoTip from "./InfoTip";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -162,17 +163,7 @@ function MetricCard({
       <div className="flex items-start justify-between">
         <span className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider flex items-center gap-1.5">
           {label}
-          {tooltip && (
-            <span className="relative inline-flex items-center group/tip" tabIndex={0}>
-              <svg className="w-3 h-3 text-[var(--text-muted)] hover:text-[var(--accent-primary)] cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-label="More info">
-                <circle cx="12" cy="12" r="10" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 16v-4M12 8h.01" />
-              </svg>
-              <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 p-2 rounded-md text-[10px] font-normal normal-case tracking-normal bg-[var(--bg-elevated)] border border-[var(--border-emphasis)] text-[var(--text-secondary)] shadow-xl opacity-0 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 transition-opacity z-50">
-                {tooltip}
-              </span>
-            </span>
-          )}
+          {tooltip && <InfoTip>{tooltip}</InfoTip>}
         </span>
         {icon && (
           <div className="w-8 h-8 rounded-lg bg-[var(--bg-overlay)] flex items-center justify-center">
@@ -208,7 +199,7 @@ function MetricCard({
 }
 
 // Progress Score Component
-function ScoreBar({ label, score, benchmark }: { label: string; score: number | null; benchmark?: number }) {
+function ScoreBar({ label, score, benchmark, tooltip }: { label: string; score: number | null; benchmark?: number; tooltip?: string }) {
   const getScoreColor = (s: number) => {
     if (s >= 80) return "var(--success-base)";
     if (s >= 60) return "var(--warning-base)";
@@ -217,7 +208,10 @@ function ScoreBar({ label, score, benchmark }: { label: string; score: number | 
 
   return (
     <div className="flex items-center gap-4">
-      <span className="text-sm text-[var(--text-secondary)] w-40 truncate">{label}</span>
+      <span className="text-sm text-[var(--text-secondary)] w-40 truncate inline-flex items-center gap-1.5">
+        {label}
+        {tooltip && <InfoTip>{tooltip}</InfoTip>}
+      </span>
       <div className="flex-1">
         <div className="progress-bar">
           <div
@@ -396,11 +390,16 @@ export default function DXDashboard({ quarter }: Props) {
           variant="accent"
         />
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-          <MetricCard label="Quality" value={metrics.quality_score} unit="/100" variant={metrics.quality_score && metrics.quality_score >= 80 ? "success" : "default"} />
-          <MetricCard label="Ease of Delivery" value={metrics.ease_of_delivery} unit="/100" />
-          <MetricCard label="Deep Work" value={metrics.deep_work} unit="/100" />
-          <MetricCard label="Build & Test" value={metrics.build_and_test} unit="/100" variant={metrics.build_and_test && metrics.build_and_test >= 90 ? "success" : "default"} />
-          <MetricCard label="AI Code Quality" value={metrics.ai_code_quality} unit="/100" variant="accent" />
+          <MetricCard label="Quality" value={metrics.quality_score} unit="/100" variant={metrics.quality_score && metrics.quality_score >= 80 ? "success" : "default"}
+            tooltip="DX survey: how confident the team is in the quality of what they ship. Higher = fewer regressions, more trust in tests. 0–100." />
+          <MetricCard label="Ease of Delivery" value={metrics.ease_of_delivery} unit="/100"
+            tooltip="DX survey: how easy it is to ship a change end-to-end (review, deploy, iterate). 0–100." />
+          <MetricCard label="Deep Work" value={metrics.deep_work} unit="/100"
+            tooltip="DX survey factor: % of time the team spends in uninterrupted focused work. Lower = more meeting/context-switch overhead." />
+          <MetricCard label="Build & Test" value={metrics.build_and_test} unit="/100" variant={metrics.build_and_test && metrics.build_and_test >= 90 ? "success" : "default"}
+            tooltip="DX survey factor: how reliable and fast local builds + CI tests are. 0–100." />
+          <MetricCard label="AI Code Quality" value={metrics.ai_code_quality} unit="/100" variant="accent"
+            tooltip="DX survey factor: perceived quality of AI-assisted code (Copilot/Cursor/Claude). 0–100." />
         </div>
       </section>
 
@@ -413,12 +412,18 @@ export default function DXDashboard({ quarter }: Props) {
         />
         <div className="card p-6">
           <div className="space-y-4">
-            <ScoreBar label="Code Maintainability" score={metrics.code_maintainability} />
-            <ScoreBar label="Documentation" score={metrics.documentation} />
-            <ScoreBar label="Planning Process" score={metrics.planning_process} />
-            <ScoreBar label="Cross-Team Collaboration" score={metrics.cross_team_collaboration} />
-            <ScoreBar label="Incremental Delivery" score={metrics.incremental_delivery} />
-            <ScoreBar label="Ease of Release" score={metrics.ease_of_release} />
+            <ScoreBar label="Code Maintainability" score={metrics.code_maintainability}
+              tooltip="DX survey: how easy it is to read, modify, and extend code without introducing bugs. 0–100." />
+            <ScoreBar label="Documentation" score={metrics.documentation}
+              tooltip="DX survey: how complete, accurate, and discoverable internal docs are. 0–100." />
+            <ScoreBar label="Planning Process" score={metrics.planning_process}
+              tooltip="DX survey: clarity and effectiveness of sprint/quarter planning. 0–100." />
+            <ScoreBar label="Cross-Team Collaboration" score={metrics.cross_team_collaboration}
+              tooltip="DX survey: how well the team works with adjacent teams (handoffs, joint debugging, alignment). 0–100." />
+            <ScoreBar label="Incremental Delivery" score={metrics.incremental_delivery}
+              tooltip="DX survey: ability to break work into small, shippable slices and deploy them frequently. 0–100." />
+            <ScoreBar label="Ease of Release" score={metrics.ease_of_release}
+              tooltip="DX survey: how confident the team is in the release process — releases are routine, not events. 0–100." />
           </div>
         </div>
       </section>
@@ -449,6 +454,7 @@ export default function DXDashboard({ quarter }: Props) {
                 unit="%"
                 subtitle="Bugs / Total tickets"
                 variant={qaCloudMetrics.defect_density && qaCloudMetrics.defect_density <= 5 ? "success" : "warning"}
+                tooltip="Org-wide bugs created in this quarter divided by all tickets created in the same window. Sourced from Jira (matches the per-project breakdown below)."
               />
               <MetricCard
                 label="Resolution Rate"
@@ -456,17 +462,20 @@ export default function DXDashboard({ quarter }: Props) {
                 unit="%"
                 subtitle="Bugs resolved"
                 variant={qaCloudMetrics.bug_resolution_rate && qaCloudMetrics.bug_resolution_rate >= 80 ? "success" : "warning"}
+                tooltip="Of bugs reported by QA in this quarter, the % already resolved. Same definition as the leadership Dashboard tile."
               />
               <MetricCard
                 label="Cycle Time"
                 value={qaCloudMetrics.cycle_time_avg_hours ? Math.round(qaCloudMetrics.cycle_time_avg_hours) : null}
                 unit="hours"
                 subtitle="Avg resolution time"
+                tooltip="Average time from ticket creation to resolution for QA tickets resolved this quarter."
               />
               <MetricCard
                 label="Backlog"
                 value={qaCloudMetrics.backlog_size.toLocaleString()}
                 subtitle="Open tickets"
+                tooltip="Open Jira tickets assigned to the QA team across all projects. Includes bugs, stories, tasks."
               />
             </div>
 
@@ -770,25 +779,19 @@ export default function DXDashboard({ quarter }: Props) {
                     <th className="text-left text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">Type</th>
                     <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">Score</th>
                     <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">
-                      <span className="relative inline-flex items-center gap-1.5 group/tip" tabIndex={0}>
+                      <span className="inline-flex items-center gap-1.5 justify-end">
                         vs Prev
-                        <svg className="w-3 h-3 cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <circle cx="12" cy="12" r="10" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 16v-4M12 8h.01" />
-                        </svg>
-                        <span className="pointer-events-none absolute bottom-full right-0 mb-2 w-56 p-2 rounded-md text-[10px] font-normal normal-case tracking-normal bg-[var(--bg-elevated)] border border-[var(--border-emphasis)] text-[var(--text-secondary)] shadow-xl opacity-0 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 transition-opacity z-50">
+                        <InfoTip placement="top" align="end">
                           Change vs the QA team's score in the previous DX survey snapshot. +4 means this score went up 4 points since last quarter.
-                        </span>
+                        </InfoTip>
                       </span>
                     </th>
                     <th className="text-right text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-6 py-4">
-                      <span className="relative inline-flex items-center gap-1.5 group/tip" tabIndex={0}>
+                      <span className="inline-flex items-center gap-1.5 justify-end">
                         vs Org
-                        <svg className="w-3 h-3 cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <circle cx="12" cy="12" r="10" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 16v-4M12 8h.01" />
-                        </svg>
-                        <span className="pointer-events-none absolute bottom-full right-0 mb-2 w-56 p-2 rounded-md text-[10px] font-normal normal-case tracking-normal bg-[var(--bg-elevated)] border border-[var(--border-emphasis)] text-[var(--text-secondary)] shadow-xl opacity-0 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 transition-opacity z-50">
+                        <InfoTip placement="top" align="end">
                           Difference from Anaconda's org-wide median for this metric. +5 means QA scores 5 points higher than the company average.
-                        </span>
+                        </InfoTip>
                       </span>
                     </th>
                   </tr>
