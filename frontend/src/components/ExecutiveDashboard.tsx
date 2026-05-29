@@ -119,24 +119,44 @@ function makeMetricLookup(items: AutomationProjectMetric[]): Record<string, Auto
   return m;
 }
 
-function makePassRateTooltip(lookup: Record<string, AutomationProjectMetric>) {
+function deltaChip(deltaPP: number, lowerIsBetter: boolean = false, unit: string = "pp"): React.ReactNode {
+  if (Math.abs(deltaPP) < 0.005) {
+    return <span style={{ color: "#94a3b8", fontSize: 11 }}> · no change</span>;
+  }
+  const goodDirection = lowerIsBetter ? deltaPP < 0 : deltaPP > 0;
+  const color = goodDirection ? "var(--success-base)" : "var(--error-base)";
+  const arrow = deltaPP > 0 ? "▲" : "▼";
+  return (
+    <span style={{ color, fontSize: 11, fontWeight: 600, marginLeft: 6 }}>
+      {arrow} {Math.abs(deltaPP).toFixed(2)}{unit} vs prev
+    </span>
+  );
+}
+
+function makePassRateTooltip(lookup: Record<string, AutomationProjectMetric>, prevLookup?: Record<string, AutomationProjectMetric>) {
   return (props: any) => {
     const { active, payload } = props || {};
     if (!active || !payload?.length) return null;
     const name = payload[0]?.payload?.name;
     const m = name ? lookup[name] : undefined;
     if (!m) return null;
+    const prev = prevLookup?.[name];
+    const delta = prev ? m.pass_rate_pct - prev.pass_rate_pct : null;
     return (
       <div style={rpTipBoxStyle}>
         <div style={{ color: "#F1F5F9", fontWeight: 600, marginBottom: 6 }}>{m.project}</div>
-        <div style={{ color: "var(--success-base)", fontWeight: 700 }}>{m.pass_rate_pct.toFixed(2)}% pass rate</div>
+        <div style={{ color: "var(--success-base)", fontWeight: 700 }}>
+          {m.pass_rate_pct.toFixed(2)}% pass rate
+          {delta !== null && deltaChip(delta, false, "pp")}
+        </div>
         <div style={{ color: "#94a3b8", marginTop: 4 }}>{m.launches} launches · {m.total_tests.toLocaleString()} tests</div>
+        {prev && <div style={{ color: "#64748b", marginTop: 2, fontSize: 11 }}>previous: {prev.pass_rate_pct.toFixed(2)}%</div>}
       </div>
     );
   };
 }
 
-function makeDurationTooltip(lookup: Record<string, AutomationProjectMetric>) {
+function makeDurationTooltip(lookup: Record<string, AutomationProjectMetric>, prevLookup?: Record<string, AutomationProjectMetric>) {
   return (props: any) => {
     const { active, payload } = props || {};
     if (!active || !payload?.length) return null;
@@ -145,17 +165,23 @@ function makeDurationTooltip(lookup: Record<string, AutomationProjectMetric>) {
     if (!m) return null;
     const minutes = Math.round(m.avg_duration_sec / 60);
     const hours = m.avg_duration_sec >= 3600 ? `${(m.avg_duration_sec / 3600).toFixed(1)}h` : null;
+    const prev = prevLookup?.[name];
+    const deltaMin = prev ? Math.round(m.avg_duration_sec / 60) - Math.round(prev.avg_duration_sec / 60) : null;
     return (
       <div style={rpTipBoxStyle}>
         <div style={{ color: "#F1F5F9", fontWeight: 600, marginBottom: 6 }}>{m.project}</div>
-        <div style={{ color: "var(--info-base)", fontWeight: 700 }}>{minutes} min{hours ? ` · ${hours}` : ""} avg</div>
+        <div style={{ color: "var(--info-base)", fontWeight: 700 }}>
+          {minutes} min{hours ? ` · ${hours}` : ""} avg
+          {deltaMin !== null && deltaChip(deltaMin, true, " min")}
+        </div>
         <div style={{ color: "#94a3b8", marginTop: 4 }}>across {m.launches} launches</div>
+        {prev && <div style={{ color: "#64748b", marginTop: 2, fontSize: 11 }}>previous: {Math.round(prev.avg_duration_sec / 60)} min</div>}
       </div>
     );
   };
 }
 
-function makeFlakyTooltip(lookup: Record<string, AutomationProjectMetric>) {
+function makeFlakyTooltip(lookup: Record<string, AutomationProjectMetric>, prevLookup?: Record<string, AutomationProjectMetric>) {
   return (props: any) => {
     const { active, payload } = props || {};
     if (!active || !payload?.length) return null;
@@ -164,11 +190,17 @@ function makeFlakyTooltip(lookup: Record<string, AutomationProjectMetric>) {
     if (!m || m.flaky_pct === null) return null;
     const v = m.flaky_pct;
     const color = v <= 5 ? "var(--success-base)" : v <= 10 ? "var(--warning-base)" : "var(--error-base)";
+    const prev = prevLookup?.[name];
+    const delta = prev && prev.flaky_pct !== null ? v - prev.flaky_pct : null;
     return (
       <div style={rpTipBoxStyle}>
         <div style={{ color: "#F1F5F9", fontWeight: 600, marginBottom: 6 }}>{m.project}</div>
-        <div style={{ color, fontWeight: 700 }}>{v.toFixed(2)}% flaky</div>
+        <div style={{ color, fontWeight: 700 }}>
+          {v.toFixed(2)}% flaky
+          {delta !== null && deltaChip(delta, true, "pp")}
+        </div>
         <div style={{ color: "#94a3b8", marginTop: 4 }}>tests alternating pass/fail · {m.launches} launches sampled</div>
+        {prev && prev.flaky_pct !== null && <div style={{ color: "#64748b", marginTop: 2, fontSize: 11 }}>previous: {prev.flaky_pct.toFixed(2)}%</div>}
       </div>
     );
   };
@@ -362,40 +394,75 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
     return ((current - previous) / previous) * 100;
   };
 
+  // When isComparing, align series by week-of-quarter index (W1, W2, …)
+  // so the previous quarter's same-relative-week sits on top of the current
+  // quarter. The X-axis switches from a date label ("05-12") to "W1 / W2 / …"
+  // when comparing, since calendar weeks differ between Q1 and Q2.
   const defectTrendData = useMemo(() => {
-    if (!data?.defect_trend) return [];
-    return data.defect_trend.map((d) => ({
-      week: d.week.slice(5),
-      Created: d.created,
-      Resolved: d.resolved,
+    const cur = data?.defect_trend ?? [];
+    const prev = isComparing ? compareData?.defect_trend ?? [] : [];
+    if (!isComparing) {
+      return cur.map((d) => ({ week: d.week.slice(5), Created: d.created, Resolved: d.resolved }));
+    }
+    const len = Math.max(cur.length, prev.length);
+    return Array.from({ length: len }, (_, i) => ({
+      week: `W${i + 1}`,
+      Created: cur[i]?.created,
+      Resolved: cur[i]?.resolved,
+      "Created (prev)": prev[i]?.created,
+      "Resolved (prev)": prev[i]?.resolved,
     }));
-  }, [data]);
+  }, [data, compareData, isComparing]);
 
   const prTrendData = useMemo(() => {
-    if (!data?.pr_trend) return [];
-    return data.pr_trend.map((d) => ({
-      week: d.week.slice(5),
-      Opened: d.opened,
-      Merged: d.merged,
+    const cur = data?.pr_trend ?? [];
+    const prev = isComparing ? compareData?.pr_trend ?? [] : [];
+    if (!isComparing) {
+      return cur.map((d) => ({ week: d.week.slice(5), Opened: d.opened, Merged: d.merged }));
+    }
+    const len = Math.max(cur.length, prev.length);
+    return Array.from({ length: len }, (_, i) => ({
+      week: `W${i + 1}`,
+      Opened: cur[i]?.opened,
+      Merged: cur[i]?.merged,
+      "Opened (prev)": prev[i]?.opened,
+      "Merged (prev)": prev[i]?.merged,
     }));
-  }, [data]);
+  }, [data, compareData, isComparing]);
 
   const velocityTrendData = useMemo(() => {
-    if (!data?.velocity_trend) return [];
-    return data.velocity_trend.map((d) => ({
-      week: d.week.slice(5),
-      Points: Math.round(d.completed_points),
-      Tickets: d.tickets_completed,
+    const cur = data?.velocity_trend ?? [];
+    const prev = isComparing ? compareData?.velocity_trend ?? [] : [];
+    if (!isComparing) {
+      return cur.map((d) => ({
+        week: d.week.slice(5),
+        Points: Math.round(d.completed_points),
+        Tickets: d.tickets_completed,
+      }));
+    }
+    const len = Math.max(cur.length, prev.length);
+    return Array.from({ length: len }, (_, i) => ({
+      week: `W${i + 1}`,
+      Points: cur[i] ? Math.round(cur[i].completed_points) : undefined,
+      Tickets: cur[i]?.tickets_completed,
+      "Points (prev)": prev[i] ? Math.round(prev[i].completed_points) : undefined,
+      "Tickets (prev)": prev[i]?.tickets_completed,
     }));
-  }, [data]);
+  }, [data, compareData, isComparing]);
 
   const reviewTrendData = useMemo(() => {
-    if (!data?.review_trend) return [];
-    return data.review_trend.map((d) => ({
-      week: d.week.slice(5),
-      Reviews: d.reviews,
+    const cur = data?.review_trend ?? [];
+    const prev = isComparing ? compareData?.review_trend ?? [] : [];
+    if (!isComparing) {
+      return cur.map((d) => ({ week: d.week.slice(5), Reviews: d.reviews }));
+    }
+    const len = Math.max(cur.length, prev.length);
+    return Array.from({ length: len }, (_, i) => ({
+      week: `W${i + 1}`,
+      Reviews: cur[i]?.reviews,
+      "Reviews (prev)": prev[i]?.reviews,
     }));
-  }, [data]);
+  }, [data, compareData, isComparing]);
 
   if (loading) {
     return (
@@ -614,7 +681,9 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <Card>
             <div className="mb-4">
               <h3 className="text-base font-semibold text-[var(--text-primary)]">Weekly Velocity Trend</h3>
-              <p className="text-xs text-[var(--text-muted)] mt-1">Story points completed per week</p>
+              <p className="text-xs text-[var(--text-muted)] mt-1">
+                Story points completed per week{isComparing ? ` · vs ${compareQuarter?.replace("-", " ")}` : ""}
+              </p>
             </div>
             {velocityTrendData.length > 0 ? (
               <ResponsiveContainer width="100%" height={280}>
@@ -627,6 +696,12 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
                   <Legend wrapperStyle={{ fontSize: "12px" }} />
                   <Bar yAxisId="left" dataKey="Points" fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
                   <Line yAxisId="right" type="monotone" dataKey="Tickets" stroke="var(--chart-4)" strokeWidth={2} dot={{ r: 3 }} />
+                  {isComparing && (
+                    <>
+                      <Bar yAxisId="left" dataKey="Points (prev)" fill="var(--chart-2)" fillOpacity={0.3} radius={[4, 4, 0, 0]} />
+                      <Line yAxisId="right" type="monotone" dataKey="Tickets (prev)" stroke="var(--chart-4)" strokeOpacity={0.4} strokeDasharray="4 4" strokeWidth={2} dot={{ r: 2 }} />
+                    </>
+                  )}
                 </ComposedChart>
               </ResponsiveContainer>
             ) : (
@@ -644,7 +719,9 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <Card>
             <div className="mb-4">
               <h3 className="text-base font-semibold text-[var(--text-primary)]">Defect Trend</h3>
-              <p className="text-xs text-[var(--text-muted)] mt-1">Bugs created vs resolved per week</p>
+              <p className="text-xs text-[var(--text-muted)] mt-1">
+                Bugs created vs resolved per week{isComparing ? ` · vs ${compareQuarter?.replace("-", " ")}` : ""}
+              </p>
             </div>
             {defectTrendData.length > 0 ? (
               <ResponsiveContainer width="100%" height={250}>
@@ -666,6 +743,12 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
                   <Legend wrapperStyle={{ fontSize: "12px" }} />
                   <Area type="monotone" dataKey="Created" stroke="var(--error-base)" strokeWidth={2} fill="url(#colorCreated)" dot={{ r: 3 }} />
                   <Area type="monotone" dataKey="Resolved" stroke="var(--success-base)" strokeWidth={2} fill="url(#colorResolved)" dot={{ r: 3 }} />
+                  {isComparing && (
+                    <>
+                      <Area type="monotone" dataKey="Created (prev)" stroke="var(--error-base)" strokeOpacity={0.45} strokeDasharray="4 4" strokeWidth={2} fill="none" dot={{ r: 2 }} />
+                      <Area type="monotone" dataKey="Resolved (prev)" stroke="var(--success-base)" strokeOpacity={0.45} strokeDasharray="4 4" strokeWidth={2} fill="none" dot={{ r: 2 }} />
+                    </>
+                  )}
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
@@ -676,7 +759,9 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           <Card>
             <div className="mb-4">
               <h3 className="text-base font-semibold text-[var(--text-primary)]">PR Activity Trend</h3>
-              <p className="text-xs text-[var(--text-muted)] mt-1">Pull requests opened and merged per week</p>
+              <p className="text-xs text-[var(--text-muted)] mt-1">
+                Pull requests opened and merged per week{isComparing ? ` · vs ${compareQuarter?.replace("-", " ")}` : ""}
+              </p>
             </div>
             {prTrendData.length > 0 ? (
               <ResponsiveContainer width="100%" height={250}>
@@ -698,6 +783,12 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
                   <Legend wrapperStyle={{ fontSize: "12px" }} />
                   <Area type="monotone" dataKey="Opened" stroke="var(--chart-1)" strokeWidth={2} fill="url(#colorOpened)" dot={{ r: 3 }} />
                   <Area type="monotone" dataKey="Merged" stroke="var(--chart-2)" strokeWidth={2} fill="url(#colorMerged)" dot={{ r: 3 }} />
+                  {isComparing && (
+                    <>
+                      <Area type="monotone" dataKey="Opened (prev)" stroke="var(--chart-1)" strokeOpacity={0.45} strokeDasharray="4 4" strokeWidth={2} fill="none" dot={{ r: 2 }} />
+                      <Area type="monotone" dataKey="Merged (prev)" stroke="var(--chart-2)" strokeOpacity={0.45} strokeDasharray="4 4" strokeWidth={2} fill="none" dot={{ r: 2 }} />
+                    </>
+                  )}
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
@@ -732,6 +823,9 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
               </div>
               {(() => {
                 const lookup = makeMetricLookup(data.automation_health!.by_project);
+                const prevLookup = isComparing && compareData?.automation_health?.by_project
+                  ? makeMetricLookup(compareData.automation_health.by_project)
+                  : undefined;
                 return (
                   <ResponsiveContainer width="100%" height={Math.max(280, data.automation_health!.by_project.length * 28)}>
                     <BarChart
@@ -742,7 +836,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
                       <XAxis type="number" domain={[0, 100]} stroke="var(--text-muted)" fontSize={11} tickLine={false} />
                       <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
-                      <Tooltip content={makePassRateTooltip(lookup)} cursor={{ fill: "var(--bg-overlay)" }} />
+                      <Tooltip content={makePassRateTooltip(lookup, prevLookup)} cursor={{ fill: "var(--bg-overlay)" }} />
                       <Bar dataKey="Pass %" radius={[0, 4, 4, 0]}>
                         {data.automation_health!.by_project.map((p, idx) => (
                           <Cell
@@ -771,6 +865,9 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
               </div>
               {(() => {
                 const lookup = makeMetricLookup(data.automation_health!.by_project);
+                const prevLookup = isComparing && compareData?.automation_health?.by_project
+                  ? makeMetricLookup(compareData.automation_health.by_project)
+                  : undefined;
                 return (
                   <ResponsiveContainer width="100%" height={Math.max(280, data.automation_health!.by_project.length * 28)}>
                     <BarChart
@@ -783,7 +880,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
                       <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
                       <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
-                      <Tooltip content={makeDurationTooltip(lookup)} cursor={{ fill: "var(--bg-overlay)" }} />
+                      <Tooltip content={makeDurationTooltip(lookup, prevLookup)} cursor={{ fill: "var(--bg-overlay)" }} />
                       <Bar dataKey="Minutes" fill="var(--info-base)" radius={[0, 4, 4, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
@@ -804,6 +901,9 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
                 }
                 const sorted = [...eligible].sort((a, b) => (b.flaky_pct ?? 0) - (a.flaky_pct ?? 0));
                 const lookup = makeMetricLookup(data.automation_health!.by_project);
+                const prevLookup = isComparing && compareData?.automation_health?.by_project
+                  ? makeMetricLookup(compareData.automation_health.by_project)
+                  : undefined;
                 return (
                   <ResponsiveContainer width="100%" height={Math.max(280, sorted.length * 32)}>
                     <BarChart
@@ -814,7 +914,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
                       <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} unit="%" />
                       <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
-                      <Tooltip content={makeFlakyTooltip(lookup)} cursor={{ fill: "var(--bg-overlay)" }} />
+                      <Tooltip content={makeFlakyTooltip(lookup, prevLookup)} cursor={{ fill: "var(--bg-overlay)" }} />
                       <Bar dataKey="Flaky %" radius={[0, 4, 4, 0]}>
                         {sorted.map((p, idx) => {
                           const v = p.flaky_pct ?? 0;
@@ -841,7 +941,9 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
         <Card>
           <div className="mb-4">
             <h3 className="text-base font-semibold text-[var(--text-primary)]">Code Reviews per Week</h3>
-            <p className="text-xs text-[var(--text-muted)] mt-1">Total reviews completed by the QA team</p>
+            <p className="text-xs text-[var(--text-muted)] mt-1">
+              Total reviews completed by the QA team{isComparing ? ` · vs ${compareQuarter?.replace("-", " ")}` : ""}
+            </p>
           </div>
           {reviewTrendData.length > 0 ? (
             <ResponsiveContainer width="100%" height={250}>
@@ -858,6 +960,9 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
                 <Tooltip {...tooltipStyle} />
                 <Legend wrapperStyle={{ fontSize: "12px" }} />
                 <Area type="monotone" dataKey="Reviews" stroke="var(--chart-4)" strokeWidth={2} fill="url(#colorReviews)" dot={{ r: 3 }} />
+                {isComparing && (
+                  <Area type="monotone" dataKey="Reviews (prev)" stroke="var(--chart-4)" strokeOpacity={0.45} strokeDasharray="4 4" strokeWidth={2} fill="none" dot={{ r: 2 }} />
+                )}
               </AreaChart>
             </ResponsiveContainer>
           ) : (
