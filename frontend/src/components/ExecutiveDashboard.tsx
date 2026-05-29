@@ -4,6 +4,8 @@ import {
   AreaChart,
   Area,
   Bar,
+  BarChart,
+  Cell,
   XAxis,
   YAxis,
   Tooltip,
@@ -98,6 +100,79 @@ const tooltipStyle = {
   },
   labelStyle: { color: "#F1F5F9", fontWeight: 600, marginBottom: "8px" },
 };
+
+// Custom Recharts tooltip components for the per-project Automation Health charts.
+// Looks up the project by name and renders a richer hover than the default
+// "Pass %: 87.92" so leadership sees the project name + supporting context.
+const rpTipBoxStyle: React.CSSProperties = {
+  backgroundColor: "rgba(15, 20, 25, 0.95)",
+  border: "1px solid rgba(71, 85, 105, 0.3)",
+  borderRadius: 12,
+  padding: "12px 16px",
+  boxShadow: "0 10px 40px rgba(0,0,0,0.5)",
+  fontSize: 12,
+};
+
+function makeMetricLookup(items: AutomationProjectMetric[]): Record<string, AutomationProjectMetric> {
+  const m: Record<string, AutomationProjectMetric> = {};
+  for (const it of items) m[it.project] = it;
+  return m;
+}
+
+function makePassRateTooltip(lookup: Record<string, AutomationProjectMetric>) {
+  return (props: any) => {
+    const { active, payload } = props || {};
+    if (!active || !payload?.length) return null;
+    const name = payload[0]?.payload?.name;
+    const m = name ? lookup[name] : undefined;
+    if (!m) return null;
+    return (
+      <div style={rpTipBoxStyle}>
+        <div style={{ color: "#F1F5F9", fontWeight: 600, marginBottom: 6 }}>{m.project}</div>
+        <div style={{ color: "var(--success-base)", fontWeight: 700 }}>{m.pass_rate_pct.toFixed(2)}% pass rate</div>
+        <div style={{ color: "#94a3b8", marginTop: 4 }}>{m.launches} launches · {m.total_tests.toLocaleString()} tests</div>
+      </div>
+    );
+  };
+}
+
+function makeDurationTooltip(lookup: Record<string, AutomationProjectMetric>) {
+  return (props: any) => {
+    const { active, payload } = props || {};
+    if (!active || !payload?.length) return null;
+    const name = payload[0]?.payload?.name;
+    const m = name ? lookup[name] : undefined;
+    if (!m) return null;
+    const minutes = Math.round(m.avg_duration_sec / 60);
+    const hours = m.avg_duration_sec >= 3600 ? `${(m.avg_duration_sec / 3600).toFixed(1)}h` : null;
+    return (
+      <div style={rpTipBoxStyle}>
+        <div style={{ color: "#F1F5F9", fontWeight: 600, marginBottom: 6 }}>{m.project}</div>
+        <div style={{ color: "var(--info-base)", fontWeight: 700 }}>{minutes} min{hours ? ` · ${hours}` : ""} avg</div>
+        <div style={{ color: "#94a3b8", marginTop: 4 }}>across {m.launches} launches</div>
+      </div>
+    );
+  };
+}
+
+function makeFlakyTooltip(lookup: Record<string, AutomationProjectMetric>) {
+  return (props: any) => {
+    const { active, payload } = props || {};
+    if (!active || !payload?.length) return null;
+    const name = payload[0]?.payload?.name;
+    const m = name ? lookup[name] : undefined;
+    if (!m || m.flaky_pct === null) return null;
+    const v = m.flaky_pct;
+    const color = v <= 5 ? "var(--success-base)" : v <= 10 ? "var(--warning-base)" : "var(--error-base)";
+    return (
+      <div style={rpTipBoxStyle}>
+        <div style={{ color: "#F1F5F9", fontWeight: 600, marginBottom: 6 }}>{m.project}</div>
+        <div style={{ color, fontWeight: 700 }}>{v.toFixed(2)}% flaky</div>
+        <div style={{ color: "#94a3b8", marginTop: 4 }}>tests alternating pass/fail · {m.launches} launches sampled</div>
+      </div>
+    );
+  };
+}
 
 function scrollToSection(id: string) {
   const el = document.getElementById(id);
@@ -491,6 +566,7 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
           />
           <KPICard
             title="Pass Rate"
+            scrollTo="automation-health"
             tooltip="Overall ReportPortal test pass rate this quarter, weighted across all projects. Counts only branch=main launches (excludes feature-branch noise). Target 90%."
             value={data.automation_health?.overall.pass_rate_pct ?? 0}
             suffix="%"
@@ -628,7 +704,131 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
         </div>
       </section>
 
-      {/* Automation Health detail lives on Team view; KPI tile (Pass Rate) summarizes here. */}
+      {/* Automation Health (ReportPortal-sourced, branch=main only) */}
+      <section id="automation-health" style={{ scrollMarginTop: "80px" }}>
+        <SectionHeader
+          title="Automation Health"
+          badge="ReportPortal"
+          subtitle={data.automation_health
+            ? `${data.automation_health.overall.total_launches} launches · ${data.automation_health.overall.total_tests.toLocaleString()} tests · main branch`
+            : undefined}
+        />
+        {!data.automation_health || data.automation_health.by_project.length === 0 ? (
+          <Card className="text-center text-[var(--text-muted)] py-8">
+            Automation metrics are still being snapshotted. Refresh in a minute.
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Pass Rate per project */}
+            <Card>
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-[var(--text-primary)]">Pass Rate by Project</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-1">Target 90%</p>
+              </div>
+              {(() => {
+                const lookup = makeMetricLookup(data.automation_health!.by_project);
+                return (
+                  <ResponsiveContainer width="100%" height={Math.max(280, data.automation_health!.by_project.length * 28)}>
+                    <BarChart
+                      data={data.automation_health!.by_project.map((p) => ({ name: p.project, "Pass %": p.pass_rate_pct }))}
+                      layout="vertical"
+                      margin={{ left: 10, right: 30 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
+                      <XAxis type="number" domain={[0, 100]} stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                      <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
+                      <Tooltip content={makePassRateTooltip(lookup)} cursor={{ fill: "var(--bg-overlay)" }} />
+                      <Bar dataKey="Pass %" radius={[0, 4, 4, 0]}>
+                        {data.automation_health!.by_project.map((p, idx) => (
+                          <Cell
+                            key={idx}
+                            fill={
+                              p.pass_rate_pct >= 90
+                                ? "var(--success-base)"
+                                : p.pass_rate_pct >= 75
+                                ? "var(--warning-base)"
+                                : "var(--error-base)"
+                            }
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                );
+              })()}
+            </Card>
+
+            {/* Avg Workflow Duration per project */}
+            <Card>
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-[var(--text-primary)]">Avg Workflow Duration</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-1">Minutes per launch</p>
+              </div>
+              {(() => {
+                const lookup = makeMetricLookup(data.automation_health!.by_project);
+                return (
+                  <ResponsiveContainer width="100%" height={Math.max(280, data.automation_health!.by_project.length * 28)}>
+                    <BarChart
+                      data={[...data.automation_health!.by_project]
+                        .sort((a, b) => b.avg_duration_sec - a.avg_duration_sec)
+                        .map((p) => ({ name: p.project, "Minutes": Math.round(p.avg_duration_sec / 60) }))}
+                      layout="vertical"
+                      margin={{ left: 10, right: 30 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
+                      <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                      <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
+                      <Tooltip content={makeDurationTooltip(lookup)} cursor={{ fill: "var(--bg-overlay)" }} />
+                      <Bar dataKey="Minutes" fill="var(--info-base)" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                );
+              })()}
+            </Card>
+
+            {/* Flaky Tests per project (only those with >=5 launches) */}
+            <Card>
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-[var(--text-primary)]">Flaky Tests by Project</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-1">% alternating pass/fail · projects with ≥5 launches</p>
+              </div>
+              {(() => {
+                const eligible = data.automation_health!.by_project.filter((p) => p.flaky_pct !== null);
+                if (eligible.length === 0) {
+                  return <div className="flex items-center justify-center h-[280px] text-[var(--text-muted)]">No projects with ≥5 launches yet</div>;
+                }
+                const sorted = [...eligible].sort((a, b) => (b.flaky_pct ?? 0) - (a.flaky_pct ?? 0));
+                const lookup = makeMetricLookup(data.automation_health!.by_project);
+                return (
+                  <ResponsiveContainer width="100%" height={Math.max(280, sorted.length * 32)}>
+                    <BarChart
+                      data={sorted.map((p) => ({ name: p.project, "Flaky %": p.flaky_pct ?? 0 }))}
+                      layout="vertical"
+                      margin={{ left: 10, right: 30 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" horizontal={false} />
+                      <XAxis type="number" stroke="var(--text-muted)" fontSize={11} tickLine={false} unit="%" />
+                      <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={10} width={170} tickLine={false} interval={0} />
+                      <Tooltip content={makeFlakyTooltip(lookup)} cursor={{ fill: "var(--bg-overlay)" }} />
+                      <Bar dataKey="Flaky %" radius={[0, 4, 4, 0]}>
+                        {sorted.map((p, idx) => {
+                          const v = p.flaky_pct ?? 0;
+                          return (
+                            <Cell
+                              key={idx}
+                              fill={v <= 5 ? "var(--success-base)" : v <= 10 ? "var(--warning-base)" : "var(--error-base)"}
+                            />
+                          );
+                        })}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                );
+              })()}
+            </Card>
+          </div>
+        )}
+      </section>
 
       {/* Review Activity Trend (aggregate weekly) */}
       <section id="review-activity" style={{ scrollMarginTop: "80px" }}>
