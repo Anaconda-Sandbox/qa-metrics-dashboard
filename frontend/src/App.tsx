@@ -18,8 +18,10 @@ export default function App() {
   const [isComparing, setIsComparing] = useState(false);
 
   const quarterOptions = getQuarterOptions();
-  const showFilters = view !== "links";
-  const showProjectSelector = view !== "dx" && view !== "links";
+  // Individual view scopes by person + days (not by project/quarter),
+  // and Links is a static page — neither needs the dashboard filters.
+  const showFilters = view !== "links" && view !== "individual";
+  const showProjectSelector = view !== "dx" && view !== "links" && view !== "individual";
   const showCompareControls = view === "dashboard" || view === "dx";
 
   const handleCompareToggle = () => {
