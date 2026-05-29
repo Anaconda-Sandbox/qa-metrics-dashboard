@@ -121,70 +121,88 @@ PROJECT_CONFIG = {
     "SIR": {
         "name": "Sirius",
         "repos": ["sirius-qa-suite"],
+        "rp_projects": ["sirius-qa-suite"],
     },
     "PKG": {
         "name": "Package Build - Core",
         "repos": ["package-build-platform"],
+        # PKG tests run inside sirius-qa-suite — same RP project as SIR.
+        "rp_projects": ["sirius-qa-suite"],
     },
     "AIC": {
         "name": "AI Core",
         "repos": ["ai-platform-ui", "ai-core", "anaconda-ai", "ai-catalyst"],
+        "rp_projects": ["ai-platform-ui", "ai-platform-api", "ai-catalog", "anaconda-cloud-ui", "anaconda-cloud-api"],
     },
     "PA": {
         "name": "Python Anywhere",
         "repos": ["PythonAnywhere"],
+        "rp_projects": [],  # No PA RP project today
     },
     "INST": {
         "name": "Installers",
         "repos": ["installers"],
+        "rp_projects": [],
     },
     "PDA": {
         "name": "PDA",
         "repos": ["src-tooling"],
+        "rp_projects": [],
     },
     "AIP": {
         "name": "AI Platform",
         "repos": ["te-repo-testing", "audit-logs"],
+        "rp_projects": ["ai-platform-ui", "ai-platform-api"],
     },
     "CBR": {
         "name": "CBR",
         "repos": ["te-repo-testing"],
+        "rp_projects": [],
     },
     "BIG": {
         "name": "BigBend",
         "repos": ["bigbend-platform"],
+        "rp_projects": ["bigbend-platform-api-integration-tests"],
     },
     "DESK": {
         "name": "Desktop",
         "repos": ["notebooks-testing", "ai-navigator", "anaconda-desktop", "anaconda-connector"],
+        "rp_projects": ["anaconda-desktop", "anaconda-notebooks"],
     },
     "TBP": {
         "name": "Notebook",
         "repos": ["anaconda-mcp"],
+        "rp_projects": ["anaconda-notebooks"],
     },
     "CASH": {
         "name": "Auth & Payments",
         "repos": ["auth-ui", "auth-mfe"],
+        "rp_projects": ["anaconda-unified-auth", "auth-cli"],
     },
     "AQUA": {
         "name": "Aqua",
         "repos": ["ui"],
+        "rp_projects": ["anaconda-cloud-ui", "dot-org"],
     },
     "CLOUD": {
         "name": "Cloud",
         "repos": ["ui", "ai-platform-ui"],
+        "rp_projects": ["anaconda-cloud-ui", "anaconda-cloud-api", "dot-org"],
     },
     "SHP": {
         "name": "Self-Hosted Platform",
         "repos": ["ui"],
+        "rp_projects": ["anaconda-cloud-ui"],
     },
     "HUB": {
         "name": "Hub / Telemetry",
         "repos": ["distribution-installer-attribution", "installer-attribution-bootstrap", "anaconda-otel-ts-testing", "anaconda-otel-python-testing", "bigbend-platform"],
+        "rp_projects": [],
     },
     "CLI": {
         "name": "Anaconda CLI",
         "repos": ["anaconda-cli", "anaconda-cli-testing"],
+        "rp_projects": ["auth-cli"],
     },
 }
 

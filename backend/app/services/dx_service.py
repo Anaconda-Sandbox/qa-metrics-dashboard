@@ -1936,13 +1936,19 @@ async def _get_executive_top_reviewers(start_date: str, end_date: str, project: 
     ]
 
 
-async def _get_automation_health(quarter: str) -> dict | None:
+async def _get_automation_health(quarter: str, project: str | None = None) -> dict | None:
     """Return RP automation metrics for the leadership dashboard.
 
     Read path: latest snapshot in MetricSnapshot (refreshed hourly by the
     scheduler). Falls back to a live RP fetch with `include_flaky=False`
     so the dashboard doesn't pay the slow flaky-detection cost on a cold
     cache; the next scheduler tick will fill in flaky_pct.
+
+    When `project` is set, filters the cached per-project list to the
+    `rp_projects` mapping defined in PROJECT_CONFIG and recomputes the
+    overall aggregate. If the Jira project has no RP mapping (e.g. PA,
+    INST, HUB), returns a snapshot with empty by_project so the UI can
+    render a "not tracked" message.
     """
     from app.database import SessionLocal
     from app.services import snapshot_service
@@ -1952,16 +1958,43 @@ async def _get_automation_health(quarter: str) -> dict | None:
         snap = snapshot_service.get_latest_automation_metrics(db, quarter)
     finally:
         db.close()
-    if snap:
+
+    if not snap:
+        logger.info(f"RP automation snapshot missing for {quarter}; falling back to live RP fetch (no flaky)")
+        try:
+            from app.services import reportportal_service
+            snap = await reportportal_service.get_automation_metrics_for_quarter(quarter, include_flaky=False)
+        except Exception as e:
+            logger.error(f"Live RP fallback for automation metrics failed: {e}")
+            return None
+
+    if not project or project == "ALL":
         return snap
 
-    logger.info(f"RP automation snapshot missing for {quarter}; falling back to live RP fetch (no flaky)")
-    try:
-        from app.services import reportportal_service
-        return await reportportal_service.get_automation_metrics_for_quarter(quarter, include_flaky=False)
-    except Exception as e:
-        logger.error(f"Live RP fallback for automation metrics failed: {e}")
-        return None
+    # Filter snapshot to the RP projects mapped to this Jira project key.
+    from app.config import PROJECT_CONFIG
+    cfg = PROJECT_CONFIG.get(project) or {}
+    rp_keys = set(cfg.get("rp_projects") or [])
+    by_project = [p for p in (snap.get("by_project") or []) if p.get("project") in rp_keys]
+
+    # Recompute aggregate over the filtered subset
+    total_tests = sum(int(p.get("total_tests") or 0) for p in by_project)
+    total_passed = sum(int(p.get("total_passed") or 0) for p in by_project)
+    total_launches = sum(int(p.get("launches") or 0) for p in by_project)
+    durations = [float(p.get("avg_duration_sec") or 0) for p in by_project if p.get("avg_duration_sec")]
+    overall = {
+        "pass_rate_pct": round((total_passed / total_tests) * 100, 2) if total_tests else 0.0,
+        "avg_duration_sec": round(sum(durations) / len(durations), 1) if durations else 0.0,
+        "total_launches": total_launches,
+        "total_tests": total_tests,
+        "total_passed": total_passed,
+    }
+    return {
+        "quarter": snap.get("quarter", quarter),
+        "overall": overall,
+        "by_project": by_project,
+        "snapshot_date": snap.get("snapshot_date"),
+    }
 
 
 async def get_executive_dashboard_metrics(quarter: str, project: str | None = None) -> ExecutiveMetrics:
@@ -2000,7 +2033,7 @@ async def get_executive_dashboard_metrics(quarter: str, project: str | None = No
     top_reviewers = results[9] if not isinstance(results[9], Exception) else []
 
     # ReportPortal automation health — read from snapshot, fall back live.
-    automation_health = await _get_automation_health(quarter)
+    automation_health = await _get_automation_health(quarter, project)
 
     return ExecutiveMetrics(
         # Quality

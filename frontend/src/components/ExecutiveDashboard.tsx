@@ -715,7 +715,9 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
         />
         {!data.automation_health || data.automation_health.by_project.length === 0 ? (
           <Card className="text-center text-[var(--text-muted)] py-8">
-            Automation metrics are still being snapshotted. Refresh in a minute.
+            {project && project !== "ALL"
+              ? `Automation Health is not tracked for ${project} in ReportPortal yet.`
+              : "Automation metrics are still being snapshotted. Refresh in a minute."}
           </Card>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
