@@ -19,13 +19,6 @@ interface DXMetrics {
   ai_code_quality: number | null;
 }
 
-interface DORAMetrics {
-  deployment_frequency: number | null;
-  lead_time_for_changes: number | null;
-  mean_time_to_recovery: number | null;
-  change_failure_rate: number | null;
-}
-
 interface Snapshot {
   id: string;
   scheduled_for: string;
@@ -111,7 +104,6 @@ interface DXDashboardData {
   quarter: string;
   snapshot: Snapshot | null;
   metrics: DXMetrics;
-  dora: DORAMetrics;
   team: TeamInfo | null;
   qa_scores: QAScore[];
   from_cache: boolean;
@@ -348,7 +340,7 @@ export default function DXDashboard({ quarter }: Props) {
 
   if (!data) return null;
 
-  const { metrics, dora, snapshot, team, qa_scores } = data;
+  const { metrics, snapshot, team, qa_scores } = data;
 
   // Get KPI scores for display
   const kpiScores = qa_scores.filter(s => s.item_type === "kpi");

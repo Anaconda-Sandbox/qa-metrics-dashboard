@@ -73,15 +73,6 @@ async def get_all_metrics(
     return data
 
 
-@router.get("/dora")
-async def get_dora_metrics(
-    quarter: str = Query(..., description="Quarter in format YYYY-QN")
-):
-    """Get DORA metrics for a specific quarter."""
-    dora = await dx_service.get_dora_metrics_for_quarter(quarter)
-    return dora.model_dump()
-
-
 @router.get("/qa-metrics")
 async def get_qa_data_cloud_metrics(
     quarter: str = Query(..., description="Quarter in format YYYY-QN"),
@@ -178,9 +169,6 @@ async def get_dashboard_data(
     # Get current quarter data from DB (with sync if needed)
     cached_data = await dx_service.sync_dx_data_for_quarter(db, quarter, force=refresh)
 
-    # Get DORA metrics (cached in DB, 6hr TTL)
-    dora = await dx_service.get_cached_dora_metrics(db, quarter, force=refresh)
-
     # Get team info (cached in DB, 24hr TTL)
     team = await dx_service.get_cached_team_info(db, force=refresh)
 
@@ -196,7 +184,6 @@ async def get_dashboard_data(
         "quarter": quarter,
         "snapshot": cached_data.get("snapshot"),
         "metrics": cached_data.get("metrics"),
-        "dora": dora.model_dump(),
         "qa_cloud_metrics": None,  # Fetched separately via /api/dx/qa-metrics
         "pr_metrics": None,  # Can be added later from DB
         "team": team.model_dump() if team else None,

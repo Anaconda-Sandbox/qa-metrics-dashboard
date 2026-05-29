@@ -149,6 +149,12 @@ async def refresh_bug_metrics_snapshot():
     logger.info("Refreshing QA roster snapshot from Jira group")
     from app.services.snapshot_service import snapshot_qa_roster
     await snapshot_qa_roster()
+    # Executive payload — must run AFTER bug & defect-density snapshots
+    # since get_executive_dashboard_metrics() reads them. This is the
+    # heaviest snapshot job (~162 DX SQL queries × ~1s each = a few minutes).
+    logger.info(f"Refreshing executive-payload snapshot for {quarter}")
+    from app.services.snapshot_service import snapshot_executive_metrics_for_quarter
+    await snapshot_executive_metrics_for_quarter(quarter)
 
 
 async def refresh_automation_metrics_snapshot():

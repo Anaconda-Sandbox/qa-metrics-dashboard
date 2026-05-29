@@ -28,6 +28,60 @@ DEFECT_DENSITY_METRIC_TYPE = "defect_density_by_project"
 # quarter='ALL') because the roster is org-state, not quarter-scoped.
 QA_ROSTER_METRIC_TYPE = "qa_team_roster"
 
+# Full executive-dashboard payload for /api/dx/executive — one row per
+# (project, quarter). project=None means ALL. Read path returns sub-100ms
+# vs ~7s for the live 9-SQL-per-request path. Refreshed hourly.
+EXECUTIVE_METRIC_TYPE = "executive_dashboard_payload"
+
+
+async def snapshot_executive_metrics_for_quarter(quarter: str) -> None:
+    """Refresh the full ExecutiveMetrics payload for ALL + every project.
+
+    The live path runs 9 DX Cloud SQL queries per request (≈7 s). This job
+    runs them in the background and stores the JSON payload in
+    MetricSnapshot.extra_data so the dashboard read path becomes a single
+    Postgres lookup.
+    """
+    from app.services import dx_service
+    from app.config import PROJECT_CONFIG
+
+    db = SessionLocal()
+    try:
+        today = date.today()
+        projects: list[str | None] = [None] + list(PROJECT_CONFIG.keys())  # None = ALL
+        for project in projects:
+            label = project or "ALL"
+            try:
+                # Compute live (the function reads from snapshot first; we set
+                # use_snapshot=False explicitly to force a fresh compute here).
+                metrics = await dx_service.get_executive_dashboard_metrics(
+                    quarter, project=project, use_snapshot=False
+                )
+                _upsert_metric(
+                    db, today, project, quarter, EXECUTIVE_METRIC_TYPE,
+                    float(metrics.bug_resolution_rate or 0),  # store rate as scalar value
+                    extra_data=metrics.model_dump(),
+                )
+                db.commit()
+                logger.info(f"Executive snapshot {quarter}/{label}: open_bugs={metrics.open_bugs} pass_rate={metrics.bug_resolution_rate}")
+            except Exception as e:
+                logger.error(f"Executive snapshot failed for {quarter}/{label}: {e}")
+                db.rollback()
+    finally:
+        db.close()
+
+
+def get_latest_executive_metrics(db: Session, project: str | None, quarter: str) -> dict | None:
+    """Return latest cached ExecutiveMetrics payload for (project, quarter)."""
+    row = db.query(MetricSnapshot).filter(
+        MetricSnapshot.project.is_(None) if project is None else MetricSnapshot.project == project,
+        MetricSnapshot.quarter == quarter,
+        MetricSnapshot.metric_type == EXECUTIVE_METRIC_TYPE,
+    ).order_by(MetricSnapshot.snapshot_date.desc(), MetricSnapshot.created_at.desc()).first()
+    if not row or not row.extra_data:
+        return None
+    return row.extra_data
+
 
 async def snapshot_qa_roster() -> None:
     """Refresh the QA team roster from Jira (active members of the 'QA' group)."""

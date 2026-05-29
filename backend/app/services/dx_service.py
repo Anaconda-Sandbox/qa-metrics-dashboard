@@ -1997,14 +1997,37 @@ async def _get_automation_health(quarter: str, project: str | None = None) -> di
     }
 
 
-async def get_executive_dashboard_metrics(quarter: str, project: str | None = None) -> ExecutiveMetrics:
+async def get_executive_dashboard_metrics(
+    quarter: str,
+    project: str | None = None,
+    use_snapshot: bool = True,
+) -> ExecutiveMetrics:
     """Get all executive dashboard metrics from DX Data Cloud.
+
+    Read path: when use_snapshot=True (default, request path), looks up the
+    cached payload from MetricSnapshot first. Sub-100ms when present.
+    Falls back to the live 9-SQL-query compute when no snapshot exists.
+    The hourly scheduler calls this with use_snapshot=False to populate.
 
     `project` (optional Jira key like 'DESK') narrows results to that single project:
     Jira-sourced metrics filter via `jira_projects.key`; PR/review metrics filter via
     the repos mapped in PROJECT_CONFIG[project].repos. The QA-team join is always
     enforced — selection narrows scope, never widens it beyond the QA team.
     """
+    if use_snapshot:
+        from app.database import SessionLocal
+        from app.services import snapshot_service
+        db = SessionLocal()
+        try:
+            cached = snapshot_service.get_latest_executive_metrics(db, project, quarter)
+        finally:
+            db.close()
+        if cached:
+            try:
+                return ExecutiveMetrics(**cached)
+            except Exception as e:
+                logger.warning(f"Snapshot payload for {quarter}/{project} unmarshal failed; falling back to live: {e}")
+
     start_date, end_date = _get_quarter_date_range(quarter)
 
     results = await asyncio.gather(
