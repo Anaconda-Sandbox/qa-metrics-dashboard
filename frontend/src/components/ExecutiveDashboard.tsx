@@ -476,14 +476,17 @@ export default function ExecutiveDashboard({ quarter, project, compareQuarter, o
       <section>
         <SectionHeader title="Executive Summary" subtitle={periodLabel} />
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
-          <KPICard
-            title="Coverage"
-            value={28}
-            suffix=" Projects"
-            description="24 dedicated + 4 support"
-            color="info"
-            tooltip="Total number of projects under QA coverage. Dedicated = QA owns the test plan; Support = QA assists when needed."
-          />
+          {/* Coverage is a team-wide context metric — only shown on the ALL-projects view. */}
+          {(!project || project === "ALL") && (
+            <KPICard
+              title="Coverage"
+              value={28}
+              suffix=" Projects"
+              description="24 dedicated + 4 support"
+              color="info"
+              tooltip="Total number of projects under QA coverage. Dedicated = QA owns the test plan; Support = QA assists when needed."
+            />
+          )}
           <KPICard
             title="QA-Reported Bugs"
             scrollTo="quality-metrics"
