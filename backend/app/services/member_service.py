@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from app.config import GITHUB_TO_JIRA_NAME, ALL_QA_MEMBERS, get_settings
+from app.config import GITHUB_TO_JIRA_NAME, get_settings
 from app.models.metrics import (
     GitHubActivityItem,
     JiraActivityItem,
@@ -284,15 +284,3 @@ async def get_member_activity(username: str, days: int = 30, use_cache: bool = T
     # Cache for 15 minutes
     cache_service.cache_set(cache_key, result.model_dump(), ttl=900)
     return result
-
-
-async def refresh_all_members_activity(days: int = 30):
-    """Background task to refresh all member activity data"""
-    logger.info("Starting background refresh of all member activity...")
-    for member in ALL_QA_MEMBERS:
-        try:
-            await get_member_activity(member, days=days, use_cache=False)
-            logger.info(f"Refreshed activity for {member}")
-        except Exception as e:
-            logger.error(f"Error refreshing activity for {member}: {e}")
-    logger.info("Completed background refresh of all member activity")

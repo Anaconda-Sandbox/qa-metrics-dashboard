@@ -480,14 +480,6 @@ def get_metric_history(db: Session, project: str | None, quarter: str, metric_ty
     ).order_by(MetricSnapshot.snapshot_date.desc()).limit(days).all()
 
 
-def get_weekly_trends(db: Session, project: str | None, metric_type: str, weeks: int = 12):
-    """Get weekly trend data from database."""
-    return db.query(WeeklyTrend).filter(
-        WeeklyTrend.project == project,
-        WeeklyTrend.metric_type == metric_type
-    ).order_by(WeeklyTrend.week.desc()).limit(weeks).all()
-
-
 def get_quarter_comparison(db: Session, project: str | None, metric_type: str, quarter1: str, quarter2: str):
     """Compare a metric between two quarters."""
     q1 = db.query(MetricSnapshot).filter(

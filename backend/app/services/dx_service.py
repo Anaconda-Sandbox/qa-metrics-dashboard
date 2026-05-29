@@ -1,7 +1,7 @@
 """
 DX (Developer Experience) API Service
 Integrates with DX platform to fetch developer experience metrics,
-survey snapshots, team data, and DORA metrics.
+survey snapshots, team data, and Cloud-SQL-derived metrics.
 """
 from __future__ import annotations
 
@@ -75,13 +75,6 @@ class DXTeamInfo(BaseModel):
     manager_email: str
     contributor_count: int
     members: list[DXTeamMember]
-
-
-class DORAMetrics(BaseModel):
-    deployment_frequency: float | None
-    lead_time_for_changes: float | None
-    mean_time_to_recovery: float | None
-    change_failure_rate: float | None
 
 
 class PRMetrics(BaseModel):
@@ -832,54 +825,6 @@ async def _get_ai_adoption_metrics(start_date: str, end_date: str) -> dict:
     return result
 
 
-async def get_dora_metrics_for_quarter(quarter: str) -> DORAMetrics:
-    """Get DORA metrics from DX for a quarter."""
-    start_date, end_date = _get_quarter_date_range(quarter)
-
-    # Query deployment frequency
-    deploy_sql = f"""
-    SELECT
-        COUNT(*) as deploy_count,
-        COUNT(DISTINCT DATE(created)) as deploy_days
-    FROM github_deployments
-    WHERE created >= '{start_date}'
-      AND created <= '{end_date}'
-    """
-
-    # Query lead time for changes (from commit to deploy)
-    lead_time_sql = f"""
-    SELECT
-        AVG(CASE WHEN open_to_merge IS NOT NULL THEN CAST(open_to_merge AS FLOAT) / 60 / 24 ELSE NULL END) as avg_lead_time_days
-    FROM github_pulls
-    WHERE merged >= '{start_date}'
-      AND merged <= '{end_date}'
-    """
-
-    deploy_results, lead_time_results = await asyncio.gather(
-        _run_sql_query(deploy_sql),
-        _run_sql_query(lead_time_sql)
-    )
-
-    # Calculate deployment frequency (deploys per week)
-    deployment_frequency = None
-    if deploy_results:
-        deploy_count = int(deploy_results[0].get("deploy_count", 0) or 0)
-        # Approximate weeks in quarter
-        deployment_frequency = deploy_count / 13 if deploy_count > 0 else 0
-
-    # Lead time in days
-    lead_time = None
-    if lead_time_results and lead_time_results[0].get("avg_lead_time_days"):
-        lead_time = round(float(lead_time_results[0]["avg_lead_time_days"]), 2)
-
-    return DORAMetrics(
-        deployment_frequency=round(deployment_frequency, 2) if deployment_frequency else None,
-        lead_time_for_changes=lead_time,
-        mean_time_to_recovery=None,  # Would need incident data
-        change_failure_rate=None  # Would need incident data
-    )
-
-
 async def get_quarterly_dx_data(quarter: str) -> DXQuarterlyData:
     """Get all DX data for a specific quarter."""
     # Get snapshot for quarter
@@ -1194,52 +1139,7 @@ async def sync_dx_data_for_quarter(db, quarter: str, force: bool = False) -> dic
     }
 
 
-# ============ DORA, TEAM, BENCHMARKS CACHING ============
-
-def get_dora_from_db(db, quarter: str):
-    """Get cached DORA metrics."""
-    from app.database import DXDORAMetrics
-    return db.query(DXDORAMetrics).filter(DXDORAMetrics.quarter == quarter).first()
-
-
-def save_dora_to_db(db, quarter: str, dora: DORAMetrics):
-    """Save DORA metrics to DB."""
-    from app.database import DXDORAMetrics
-    existing = get_dora_from_db(db, quarter)
-    if existing:
-        existing.deployment_frequency = dora.deployment_frequency
-        existing.lead_time_for_changes = dora.lead_time_for_changes
-        existing.mean_time_to_recovery = dora.mean_time_to_recovery
-        existing.change_failure_rate = dora.change_failure_rate
-        existing.updated_at = datetime.utcnow()
-    else:
-        db.add(DXDORAMetrics(
-            quarter=quarter,
-            deployment_frequency=dora.deployment_frequency,
-            lead_time_for_changes=dora.lead_time_for_changes,
-            mean_time_to_recovery=dora.mean_time_to_recovery,
-            change_failure_rate=dora.change_failure_rate
-        ))
-    db.commit()
-
-
-async def get_cached_dora_metrics(db, quarter: str, force: bool = False) -> DORAMetrics:
-    """Get DORA metrics with DB caching (6hr TTL)."""
-    if not force:
-        cached = get_dora_from_db(db, quarter)
-        if cached and cached.updated_at:
-            if datetime.utcnow() - cached.updated_at < timedelta(hours=6):
-                return DORAMetrics(
-                    deployment_frequency=cached.deployment_frequency,
-                    lead_time_for_changes=cached.lead_time_for_changes,
-                    mean_time_to_recovery=cached.mean_time_to_recovery,
-                    change_failure_rate=cached.change_failure_rate
-                )
-
-    dora = await get_dora_metrics_for_quarter(quarter)
-    save_dora_to_db(db, quarter, dora)
-    return dora
-
+# ============ TEAM, BENCHMARKS CACHING ============
 
 def get_team_from_db(db, team_id: str):
     """Get cached team info."""

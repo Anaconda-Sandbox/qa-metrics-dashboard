@@ -42,16 +42,6 @@ def cache_set(key: str, value: Any, ttl: int = DEFAULT_TTL) -> bool:
         return False
 
 
-def cache_delete(key: str) -> bool:
-    try:
-        client = get_redis()
-        client.delete(key)
-        return True
-    except redis.RedisError as e:
-        logger.warning(f"Redis DELETE error for {key}: {e}")
-        return False
-
-
 def cache_keys(pattern: str) -> list[str]:
     try:
         client = get_redis()

@@ -162,20 +162,6 @@ class DXTeamScore(Base):
     )
 
 
-class DXDORAMetrics(Base):
-    """Stores DORA metrics per quarter (cached)."""
-    __tablename__ = "dx_dora_metrics"
-
-    id = Column(Integer, primary_key=True, index=True)
-    quarter = Column(String(10), nullable=False, unique=True, index=True)
-    deployment_frequency = Column(Float, nullable=True)
-    lead_time_for_changes = Column(Float, nullable=True)
-    mean_time_to_recovery = Column(Float, nullable=True)
-    change_failure_rate = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
 class DXTeamInfo(Base):
     """Stores team info (cached)."""
     __tablename__ = "dx_team_info"

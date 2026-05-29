@@ -267,8 +267,3 @@ def get_scheduler_status() -> dict:
         "refresh_in_progress": _refresh_in_progress,
         "initial_refresh_done": _initial_refresh_done,
     }
-
-
-def is_cache_ready() -> bool:
-    """Check if initial cache has been populated"""
-    return _initial_refresh_done or cache_service.cache_get("last_refresh") is not None
